@@ -25,9 +25,8 @@ function fakeBackend(overrides: Partial<JottacloudBackend> = {}): JottacloudBack
   };
 }
 
-// §13 concurrency protection: a write must never silently overwrite a change made since the file
-// was last read.
-describe("applyPendingWrite (optimistic concurrency, README.md §13)", () => {
+// A conditional write must never silently overwrite a change made since the file was last read.
+describe("applyPendingWrite (optimistic concurrency)", () => {
   it("applies the write when the current MD5 still matches ifMatchMd5", async () => {
     const backend = fakeBackend({ getMetadata: vi.fn(async () => metadata({ md5: "same" })) });
     const content = new ArrayBuffer(3);
@@ -142,7 +141,6 @@ describe("JottacloudFileSessionImpl", () => {
   });
 });
 
-// write-gatekeeper skill, Phase 2: "Caching" and "Simulation".
 describe("JottacloudFileSessionImpl caching and simulation", () => {
   it("getMetadata() caches: a second call does not hit the backend again", async () => {
     const { stub } = fakeApprovalQueue();
@@ -231,8 +229,8 @@ describe("JottacloudFileSessionImpl caching and simulation", () => {
     expect(store.get("sim:latest")).toBeUndefined();
   });
 
-  // End-to-end lifecycle through the same steps JottacloudGatekeeperImpl.applyAction runs (it isn't
-  // itself unit-testable without full Durable Object scaffolding — see README.md), catching drift
+  // End-to-end lifecycle through the same steps JottacloudGatekeeperImpl.applyAction runs (the DO
+  // itself is not unit-testable without full Durable Object scaffolding), catching drift
   // between the session's write() and the gatekeeper's apply-side cache promotion.
   it("full lifecycle: write -> simulated -> applied -> promoted to cache -> simulation cleared", async () => {
     const { stub } = fakeApprovalQueue();

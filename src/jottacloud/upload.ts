@@ -1,7 +1,6 @@
 /**
- * Upload allocation and content transfer, reproducing rclone's `files/v1/allocate` + upload-URL
- * flow (README.md §"Evidence"). This preserves Jottacloud's revision history: a write is always an
- * upload of a new revision to the existing path, never a delete-and-recreate (README.md §14).
+ * Upload allocation and content transfer using Jottacloud's `files/v1/allocate` + upload-URL flow.
+ * A write is always an upload of a new revision to the existing path, never a delete-and-recreate.
  */
 
 import { errorForStatus, JottacloudError } from "./errors";

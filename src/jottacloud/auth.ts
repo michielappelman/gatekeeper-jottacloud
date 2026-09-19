@@ -1,8 +1,6 @@
 /**
- * Personal-login-token authentication, reproducing the flow rclone's Jottacloud backend uses
- * (verified against rclone's current source — see README.md §"Evidence"). Jottacloud publishes no
- * developer API or auth docs, so this is the only cross-checked reference: two independent client
- * implementations agreeing on the wire format is the strongest evidence available (README.md §19).
+ * Personal-login-token authentication for Jottacloud. Jottacloud publishes no developer API or
+ * auth docs, so the wire format is kept isolated and covered by request-shape tests.
  *
  * Flow: a human copies a "personal login token" out of the Jottacloud web UI. It's a base64url JSON
  * blob naming a well-known/OIDC discovery URL and a one-time auth token. We fetch the discovery
@@ -154,7 +152,7 @@ export async function exchangeLoginToken(
 /**
  * Refreshes an access token against the same OIDC token endpoint discovered at connect time.
  * Standard `grant_type=refresh_token`; unlike rclone's *legacy* API path, the modern OIDC endpoint
- * takes the grant type lowercase (no uppercase rewrite is needed here — see README.md §"Evidence").
+ * takes the grant type lowercase.
  */
 export async function refreshAccessToken(
   tokenEndpoint: string, refreshToken: string, fetchImpl: typeof fetch = fetch,

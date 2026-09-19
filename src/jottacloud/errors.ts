@@ -1,8 +1,7 @@
 /**
  * Stable error codes the rest of the gatekeeper can branch on, independent of Jottacloud's own HTTP
- * statuses or response bodies (which are undocumented and not a contract we can rely on — see
- * README.md). Every call into `./client.ts` throws a `JottacloudError`, never a raw `Response` or
- * fetch failure.
+ * statuses or response bodies. Every call into `./client.ts` throws a `JottacloudError`, never a raw
+ * `Response` or fetch failure.
  */
 export type JottacloudErrorCode =
   | "AUTH_REQUIRED"

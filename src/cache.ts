@@ -1,20 +1,14 @@
 /**
- * Caching and simulation for the bound file's metadata/content (write-gatekeeper skill, Phase 2:
- * "Caching" and "Simulation").
+ * Caching and pending-write simulation for the bound file's metadata/content.
  *
- * Approach 1 from the skill ("mutate the cache on submit; invalidate on rejectAction()"): `write()`
- * computes the file's metadata as it will look once the upload lands and stores it as the
- * *simulated* state; `getMetadata()`/`read()` prefer that simulated state over the real cache while
- * a write is pending, so the caller sees its own not-yet-approved write immediately. `applyAction()`
- * promotes the simulated state to the confirmed real cache; `rejectAction()` discards it, which is
- * enough to fall back to the last confirmed state (or a fresh fetch) with no separate rollback data
- * to track, since nothing here was ever written to Jottacloud.
+ * `write()` computes the file's metadata as it will look once the upload lands and stores it as the
+ * simulated state. Reads prefer that state while a write is pending. `applyAction()` promotes the
+ * confirmed result to the real cache; `rejectAction()` discards the simulation.
  *
  * Only the single most recently submitted pending write is tracked as "simulated" — a second write
  * submitted before the first resolves simply becomes the new simulated state, and resolving the
  * first (whichever order that happens in) only clears the overlay if it is still the latest one.
- * Good enough for a single-file resource, where concurrent pending writes are rare; documented here
- * rather than hidden, per the skill's guidance on simulation gaps.
+ * This single-slot simulation is specific to the single-file resource.
  */
 
 import type { FileMetadata, JottaFilePath } from "./jottacloud/types";
@@ -29,8 +23,7 @@ export type CacheKv = {
 /** How long a fetched metadata/content pair is trusted before re-fetching. */
 export const CACHE_TTL_MS = 30_000;
 
-/** Content above this size is not cached (kept only in the pending-write record until applied);
- * see README.md's Durable Object storage size caveat. */
+/** Content above this size is not cached. */
 export const CACHE_CONTENT_MAX_BYTES = 1_000_000;
 
 const METADATA_KEY = "cache:metadata";

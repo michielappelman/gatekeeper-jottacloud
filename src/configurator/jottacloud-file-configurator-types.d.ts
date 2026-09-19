@@ -18,8 +18,7 @@ export type ConfiguratorOption = {
 
 /**
  * Live JFS lookups for the resource configurator, backed directly by the connected account's
- * device/mountpoint/folder listing (see README.md "What's not done" — this used to be a
- * plain-text-only form with no live lookups at all).
+ * device/mountpoint/folder listing.
  */
 export interface JottacloudFileConfiguratorRpc {
   listDevices(query: string): Promise<ConfiguratorOption[]>;

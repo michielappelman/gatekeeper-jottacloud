@@ -1,8 +1,6 @@
 /**
- * The abstraction the Gatekeeper session code depends on, so the undocumented direct-to-Jottacloud
- * protocol stays swappable (README.md §"Assumptions" — Jottacloud could stop tolerating third-party
- * clients, or a local-sync-folder fallback could replace this backend without touching the
- * Gatekeeper's resource/permission model).
+ * The abstraction the Gatekeeper session code depends on, keeping the undocumented direct-to-
+ * Jottacloud protocol isolated from the resource and permission model.
  */
 
 import { errorForStatus, JottacloudError } from "./errors";
@@ -21,7 +19,7 @@ export interface JottacloudBackend {
   list(username: string, folder: JottaFilePath): Promise<FolderListEntry[]>;
 }
 
-/** Talks to Jottacloud's real JFS/API endpoints (README.md §"Evidence"). */
+/** Talks to Jottacloud's real JFS/API endpoints. */
 export class DirectJottacloudBackend implements JottacloudBackend {
   #getAccessToken: AccessTokenSource;
   #fetchImpl: typeof fetch;

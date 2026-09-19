@@ -25,8 +25,7 @@ export default {
   initial: { device: DEFAULT_DEVICE, mountpoint: DEFAULT_MOUNTPOINT },
   isReady: ({ values }) => {
     const raw = (values.path ?? "").trim();
-    // A trailing slash means the human browsed into a folder but hasn't picked a file inside it
-    // yet -- this gatekeeper only ever binds a file (README.md §16: no folder resource in V1).
+    // A trailing slash means the human browsed into a folder but hasn't picked a file inside it.
     if (!raw || raw.endsWith("/")) return false;
     const path = raw.replace(/^\/+/, "");
     return path.length > 0 && !path.split("/").some(segment => segment === "" || segment === "." || segment === "..");

@@ -1,8 +1,8 @@
 /**
  * Retry/backoff for Jottacloud's transient statuses.
  *
- * Jottacloud publishes no rate-limit numbers (see README.md §3.11), so this does not try to honor a
- * requests-per-minute budget — it only retries the status codes rclone's Jottacloud backend treats
+ * Jottacloud publishes no rate-limit numbers, so this does not try to honor a requests-per-minute
+ * budget — it only retries the status codes the compatible client treats
  * as transient (429, 500, 502, 503, 504, 509), honoring `Retry-After` when Jottacloud sends one and
  * falling back to capped exponential backoff with jitter otherwise.
  */

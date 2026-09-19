@@ -3,20 +3,14 @@
  * parsers that turn a bound resource URL into the {@link JottaFilePath} its gatekeeper Durable
  * Object takes.
  *
- * A resource's `urlPattern` is permanent identity (see gatekeeper-google/src/resources.ts): never
- * change one after deploy. The file and folder resources share the same `{device, mountpoint,
- * path}` addressing scheme but cannot share a URL shape: JFS addresses a folder and a file the same
- * way syntactically (there is nothing in the path that says which), so the folder resource lives
- * under a distinct synthetic prefix (`jfs-folder`, not the real `jfs`) purely to keep
- * `getGatekeeperClassFor` able to route on the URL alone, with no live lookup.
+ * A resource's `urlPattern` is permanent identity: do not change one after deploy. The file and
+ * folder resources share the same `{device, mountpoint, path}` addressing scheme but cannot share a
+ * URL shape because JFS does not distinguish files from folders syntactically. The folder resource
+ * therefore uses the distinct `jfs-folder` prefix so routing can happen from the URL alone.
  *
- * Design (README.md §7): a **file** binding names exactly one file, chosen once at connect time;
- * none of `JottacloudFileSession`'s methods (`types.d.ts`) take a path argument, so there is no way
- * to retarget it at a different file. A **folder** binding names one folder (its `path` may be
- * empty, meaning the mountpoint's own root); `JottacloudFolderSession`'s methods take a path
- * *relative to that folder*, validated by {@link resolveWithinFolder} so it can never address
- * anything outside the bound folder — the same segment defenses below, applied to caller-supplied
- * input instead of only to what a human typed into the configurator.
+ * A file binding names exactly one file; its session has no path argument and cannot be retargeted.
+ * A folder binding names one folder (possibly the mountpoint root); session paths are relative to
+ * it and are validated by {@link resolveWithinFolder}.
  */
 
 import type { SupportedResource } from "@gadgets/workshop-shared/gatekeeper";
@@ -82,10 +76,9 @@ export function toResourceUrl(file: JottaFilePath): string {
 /**
  * Parses a bound resource URL back into a {@link JottaFilePath}.
  *
- * Throws `INVALID_RESOURCE` on any URL that is not `https://jfs.jottacloud.com/jfs/<device>/
- * <mountpoint>/<path...>` with every segment passing {@link validateSegment} — including a URL
- * containing `..`, an empty segment, or naming a different host. There is deliberately no
- * fallback: a URL this cannot parse describes no resource, so nothing is guessed.
+ * Throws `INVALID_RESOURCE` on any URL that is not a valid file resource URL with every segment
+ * passing {@link validateSegment} — including a URL containing `..`, an empty segment, or naming a
+ * different host.
  */
 export function parseResourceUrl(url: string): JottaFilePath {
   let parsed: URL;
@@ -180,11 +173,8 @@ export function isFolderResourceUrl(url: string): boolean {
  * ever address anything outside that folder. An empty (or all-slashes) relative path addresses the
  * folder's own root and resolves to `folder` unchanged.
  *
- * This is the folder resource's entire containment defense: unlike Google Drive's ID-based scope
- * check (`#assertParent`/`#inScope` in gatekeeper-google's `drive-session.ts`, which needs a live
- * lookup because a Drive ID reveals nothing about its ancestry), a JFS path's containment is fully
- * syntactic — the same segment validation `normalizeFolderPath` already applies to a human-typed
- * path, applied here to a caller-supplied one instead.
+ * JFS path containment is syntactic: the same segment validation used for a human-entered folder
+ * path is applied to every caller-supplied relative path.
  */
 export function resolveWithinFolder(folder: JottaFilePath, relativePath: string): JottaFilePath {
   const trimmed = (relativePath ?? "").trim().replace(/^\/+/, "").replace(/\/+$/, "");

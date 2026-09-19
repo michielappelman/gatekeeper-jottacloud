@@ -3,7 +3,7 @@
  * the agent-facing API.
  */
 
-/** A single JFS file, identified the way Jottacloud's JFS API addresses it (see README.md §6.3). */
+/** A single JFS file, identified the way Jottacloud's JFS API addresses it. */
 export type JottaFilePath = {
   /** Jottacloud "device" name, e.g. "Jotta" (the default used by Jottacloud's own clients). */
   device: string;

@@ -1,9 +1,7 @@
 /**
  * JFS (Jotta File System) HTTP access: metadata and binary content for one file, plus directory/
- * device/mountpoint listing for the resource configurator's live browser. Endpoint shapes and
- * parameters are cross-checked against rclone's current Jottacloud backend (README.md
- * §"Evidence") — Jottacloud publishes no API docs, so this is undocumented-but-verified, not a
- * guaranteed contract (README.md §"Assumptions we do not treat as facts").
+ * device/mountpoint listing for the resource configurator's live browser. Jottacloud publishes no
+ * API docs, so keep these undocumented endpoint shapes isolated and covered by tests.
  */
 
 import { errorForStatus, JottacloudError } from "./errors";
@@ -18,9 +16,7 @@ export const DEFAULT_DEVICE = "Jotta";
  * this deployment's account keeps its real files under "Sync" (the desktop-client sync target) —
  * confirmed against the live account, not assumed. Falling back to the wrong one here would only
  * matter if some caller ever supplies an empty mountpoint outside the resource configurator (which
- * always supplies a concrete value), but the configurator's own default (README.md's configurator
- * module) must agree with this one or clearing the field mid-browse would silently point at the
- * other mountpoint's contents.
+ * always supplies a concrete value), but the configurator's default must agree with this one.
  */
 export const DEFAULT_MOUNTPOINT = "Sync";
 

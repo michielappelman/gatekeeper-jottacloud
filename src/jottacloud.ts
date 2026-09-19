@@ -107,9 +107,8 @@ function errorMessage(error: unknown): string {
 }
 
 // ---------------------------------------------------------------------------
-// HTML for the connect flow. Jottacloud has no OAuth authorize redirect for personal accounts
-// (README.md §"Evidence"): the human copies a one-time personal login token out of the Jottacloud
-// web UI and pastes it here, so the whole exchange happens server-side in this POST handler.
+// HTML for the connect flow. The human copies a one-time personal login token out of the
+// Jottacloud web UI and pastes it here; the whole exchange happens server-side in this POST handler.
 
 const CONNECT_FORM_HTML = (params: { actionUrl: string; error?: string }) => `<!DOCTYPE html>
 <html lang="en">
@@ -429,9 +428,8 @@ export class UserAccount extends DurableObject<Env> {
   }
 
   async revoke(): Promise<void> {
-    // Jottacloud exposes no token-revocation endpoint we've verified (README.md §"Assumptions");
-    // dropping the local credentials still prevents any further use from this Gatekeeper. The user
-    // can additionally revoke the device from Jottacloud's own device/session list.
+    // Dropping local credentials prevents any further use from this Gatekeeper. The user can also
+    // revoke the device from Jottacloud's own device/session list.
     this.#credentials.clear();
     await this.ctx.storage.deleteAlarm();
     await this.ctx.storage.deleteAll();
@@ -525,8 +523,8 @@ export class JottacloudGatekeeperUserImpl extends WorkerEntrypoint<Env, Jottaclo
     return {};
   }
 
-  /** Strategy A (private-only, see JottacloudGatekeeperImpl.addObserver): the verifier is never
-   * consulted, but the overseer mints one on every collaborator open, so this must still resolve. */
+  /** The verifier is not used for this private-only account connection, but the overseer still
+   * expects one when opening a collaborator context. */
   @skipRpcValidation()
   async getVerifier(): Promise<Fetcher<GatekeeperUserVerifier>> {
     return this.ctx.exports.JottacloudVerifier({});
@@ -723,8 +721,8 @@ export type PendingWrite = {
 
 /**
  * Applies a deferred write, re-checking `ifMatchMd5` against the file's live state (more time may
- * have passed since the write was submitted than the caller expected — README.md §13). Exported
- * standalone (independent of the DO's `ctx`) so this concurrency check has direct unit coverage.
+ * have passed since the write was submitted than the caller expected). Exported standalone
+ * (independent of the DO's `ctx`) so this concurrency check has direct unit coverage.
  * Returns the confirmed post-write metadata, which the caller promotes into the real cache.
  */
 export async function applyPendingWrite(
@@ -831,10 +829,8 @@ export class JottacloudGatekeeperImpl extends DurableObject<Env, JottacloudGatek
   }
 
   /**
-   * Observer tracking — strategy A (private-only, see write-gatekeeper skill "Observer
-   * verification"). A bound file is one person's private Jottacloud content and Jottacloud gives us
-   * no per-observer ACL oracle to check another connected account against, so no collaborator may
-   * observe data read through this binding.
+   * Bindings are private to the account owner. Jottacloud does not provide a verified per-observer
+   * authorization check for this integration, so collaborators may not observe this binding.
    */
   async addObserver(_id: string, _user: Fetcher<GatekeeperUserVerifier>): Promise<void> {
     throw new Error(
@@ -1049,10 +1045,8 @@ export class JottacloudFolderGatekeeperImpl extends DurableObject<Env, Jottaclou
   }
 
   /** Approved: perform the deferred upload, re-checking `ifMatchMd5` against the target file's live
-   * state (same race-safety `applyPendingWrite` gives the single-file gatekeeper — README.md §13 —
-   * just applied to whichever file within the folder this particular write targeted). There is no
-   * cache/simulation overlay to promote or clear here; see `JottacloudFolderSessionImpl.write()`'s
-   * doc comment for why folder writes don't simulate in V1. */
+   * state (the same check used by the single-file gatekeeper, applied to the targeted file). There
+   * is no cache/simulation overlay to promote or clear here.
   async applyAction(actionId: number): Promise<void> {
     const key = `write:pending:${actionId}`;
     const pending = this.ctx.storage.kv.get<PendingFolderWrite>(key);
@@ -1077,8 +1071,7 @@ export class JottacloudFolderGatekeeperImpl extends DurableObject<Env, Jottaclou
     };
   }
 
-  /** Observer tracking — strategy A (private-only), same as the single-file gatekeeper and for the
-   * same reason: Jottacloud gives no per-observer ACL oracle to check a second account against. */
+  /** Folder bindings are private to the account owner. */
   async addObserver(_id: string, _user: Fetcher<GatekeeperUserVerifier>): Promise<void> {
     throw new Error(
       "This Jottacloud folder cannot be shared with other users: it may only be observed by the " +
@@ -1196,10 +1189,9 @@ export class JottacloudFolderSessionImpl extends RpcTarget implements Jottacloud
   /**
    * Unlike `JottacloudFileSession.write()`, this does not simulate: a folder can hold many files,
    * so simulating would mean tracking a pending overlay per path rather than one fixed slot, and
-   * no caching exists yet on this session either for it to interact with (write-gatekeeper skill
-   * "Caching"/"Simulation" — see README.md's "What's not done"). Until the write is approved and
-   * applied, `read()`/`getMetadata()` on this same path keep reflecting Jottacloud's previous
-   * content, not this pending write.
+   * no caching exists yet on this session either for it to interact with. Until the write is
+   * approved and applied, `read()`/`getMetadata()` on this same path keep reflecting Jottacloud's
+   * previous content, not this pending write.
    */
   async write(path: string, content: ArrayBuffer, ifMatchMd5?: string): Promise<void> {
     const file = this.#resolveFile(path);
