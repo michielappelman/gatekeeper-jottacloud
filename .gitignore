@@ -1,9 +1,9 @@
 node_modules/
-packages/*/dist/
-packages/*/.wrangler/
-packages/*/wrangler.prod.jsonc
+dist/
+.wrangler/
+wrangler.prod.jsonc
 deployment.local.jsonc
 
 # Generated at build/deploy time by @gadgets/scripts' gatekeeper-configurator task.
-packages/gatekeeper-*/src/generated/*-configurator-ui.txt
-packages/gatekeeper-*/src/generated/*-configurator-ui.js*
+src/generated/*-configurator-ui.txt
+src/generated/*-configurator-ui.js*
