@@ -13,7 +13,10 @@ export type JottacloudErrorCode =
   | "DOWNLOAD_FAILED"
   | "RATE_LIMITED"
   | "UPSTREAM_UNAVAILABLE"
-  | "INVALID_RESOURCE";
+  | "INVALID_RESOURCE"
+  | "UNSUPPORTED_FOR_MARKDOWN"
+  | "TOO_LARGE_FOR_MARKDOWN"
+  | "MARKDOWN_CONVERSION_FAILED";
 
 export class JottacloudError extends Error {
   constructor(readonly code: JottacloudErrorCode, message: string, options?: { cause?: unknown }) {

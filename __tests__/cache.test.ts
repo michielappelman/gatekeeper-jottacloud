@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   CACHE_CONTENT_MAX_BYTES,
+  CACHE_MARKDOWN_MAX_CHARS,
   CACHE_TTL_MS,
   clearSimulatedWriteIfLatest,
   getCachedContent,
+  getCachedMarkdown,
   getCachedMetadata,
   getSimulatedWrite,
   putCachedContent,
+  putCachedMarkdown,
   putCachedMetadata,
   setSimulatedWrite,
   simulateWriteMetadata,
@@ -79,6 +82,40 @@ describe("content cache", () => {
     const atCap = new ArrayBuffer(CACHE_CONTENT_MAX_BYTES);
     putCachedContent(kv, "abc123", atCap, 1000);
     expect(getCachedContent(kv, 1000)).toEqual({ md5: "abc123", content: atCap });
+  });
+});
+
+describe("markdown cache", () => {
+  it("returns undefined when nothing is cached", () => {
+    expect(getCachedMarkdown(fakeKv(), 1000)).toBeUndefined();
+  });
+
+  it("returns the cached markdown and the MD5 it was converted from, while fresh", () => {
+    const kv = fakeKv();
+    putCachedMarkdown(kv, { md5: "abc123", markdown: "# Hello", sourceMimeType: "application/pdf" }, 1000);
+    expect(getCachedMarkdown(kv, 1000)).toEqual(
+      { md5: "abc123", markdown: "# Hello", sourceMimeType: "application/pdf" });
+  });
+
+  it("expires after the TTL", () => {
+    const kv = fakeKv();
+    putCachedMarkdown(kv, { md5: "abc123", markdown: "# Hello", sourceMimeType: "application/pdf" }, 1000);
+    expect(getCachedMarkdown(kv, 1000 + CACHE_TTL_MS)).toBeUndefined();
+  });
+
+  it("does not cache markdown over the size cap", () => {
+    const kv = fakeKv();
+    const oversized = "x".repeat(CACHE_MARKDOWN_MAX_CHARS + 1);
+    putCachedMarkdown(kv, { md5: "abc123", markdown: oversized, sourceMimeType: "application/pdf" }, 1000);
+    expect(getCachedMarkdown(kv, 1000)).toBeUndefined();
+  });
+
+  it("caches markdown exactly at the size cap", () => {
+    const kv = fakeKv();
+    const atCap = "x".repeat(CACHE_MARKDOWN_MAX_CHARS);
+    putCachedMarkdown(kv, { md5: "abc123", markdown: atCap, sourceMimeType: "application/pdf" }, 1000);
+    expect(getCachedMarkdown(kv, 1000)).toEqual(
+      { md5: "abc123", markdown: atCap, sourceMimeType: "application/pdf" });
   });
 });
 

@@ -39,15 +39,18 @@ import {
 import {
   clearSimulatedWriteIfLatest,
   getCachedContent,
+  getCachedMarkdown,
   getCachedMetadata,
   getSimulatedWrite,
   putCachedContent,
+  putCachedMarkdown,
   putCachedMetadata,
   setSimulatedWrite,
   simulateWriteMetadata,
 } from "./cache";
 import { decodeLoginToken, exchangeLoginToken, refreshAccessToken } from "./jottacloud/auth";
 import { DirectJottacloudBackend, JottacloudError, type JottacloudBackend } from "./jottacloud/client";
+import { assertMarkdownConvertible, convertToMarkdown } from "./markdown";
 import {
   DEFAULT_DEVICE,
   DEFAULT_MOUNTPOINT,
@@ -77,6 +80,7 @@ import type {
   JottacloudFolderEntry,
   JottacloudFolderScope,
   JottacloudFolderSession,
+  JottacloudMarkdownContent,
 } from "./types";
 import TYPES_CODE from "./types.txt";
 import JOTTACLOUD_FILE_CONFIGURATOR_HTML from "./generated/jottacloud-file-configurator-ui.txt";
@@ -791,7 +795,8 @@ export class JottacloudGatekeeperImpl extends DurableObject<Env, JottacloudGatek
   async startSession(approvalQueue: RpcStub<ApprovalQueue>): Promise<JottacloudFileSession> {
     const account = this.#userAccount();
     return new JottacloudFileSessionImpl(
-      approvalQueue.dup(), account, () => account.getUsername(), this.#backend(), this.#file(), this.ctx.storage.kv);
+      approvalQueue.dup(), account, () => account.getUsername(), this.#backend(), this.#file(),
+      this.ctx.storage.kv, this.env.WORKERS_AI);
   }
 
   /** Approved: perform the deferred upload, re-checking `ifMatchMd5` against the file's live state
@@ -852,11 +857,12 @@ export class JottacloudFileSessionImpl extends RpcTarget implements JottacloudFi
   #backend: DirectJottacloudBackend;
   #file: JottaFilePath;
   #kv: DurableObjectStorage["kv"];
+  #ai: Ai;
 
   constructor(
       approvalQueue: RpcStub<ApprovalQueue>, account: DurableObjectStub<UserAccount>,
       getUsername: () => Promise<string>, backend: DirectJottacloudBackend, file: JottaFilePath,
-      kv: DurableObjectStorage["kv"]) {
+      kv: DurableObjectStorage["kv"], ai: Ai) {
     super();
     this.#approvalQueue = approvalQueue;
     this.#account = account;
@@ -864,6 +870,7 @@ export class JottacloudFileSessionImpl extends RpcTarget implements JottacloudFi
     this.#backend = backend;
     this.#file = file;
     this.#kv = kv;
+    this.#ai = ai;
   }
 
   [Symbol.dispose]() {
@@ -958,6 +965,36 @@ export class JottacloudFileSessionImpl extends RpcTarget implements JottacloudFi
     return content;
   }
 
+  /**
+   * Reuses `getMetadata()` (for `mimeType`/`size`, and its own simulation/caching/observation) and
+   * `read()` (same, for content) rather than duplicating their simulated/cached/live precedence.
+   * On a Markdown cache hit at the current content's MD5, `read()` is skipped entirely -- no raw
+   * content is downloaded just to serve an already-converted result.
+   */
+  async readAsMarkdown(): Promise<JottacloudMarkdownContent> {
+    const metadata = await this.getMetadata();
+    assertMarkdownConvertible(metadata.mimeType, metadata.size);
+
+    const now = Date.now();
+    const cachedMarkdown = getCachedMarkdown(this.#kv, now);
+    if (cachedMarkdown && cachedMarkdown.md5 === metadata.md5) {
+      await this.#approvalQueue.authorizeObservation({
+        title: "Read Jottacloud file as Markdown",
+        description: `Converted the content of ${this.#file.path} to Markdown (cached).`,
+      });
+      return { markdown: cachedMarkdown.markdown, sourceMimeType: cachedMarkdown.sourceMimeType };
+    }
+
+    const content = await this.read();
+    const markdown = await convertToMarkdown(this.#ai, metadata.name, metadata.mimeType, content);
+    putCachedMarkdown(this.#kv, { md5: metadata.md5, markdown, sourceMimeType: metadata.mimeType }, now);
+    await this.#approvalQueue.authorizeObservation({
+      title: "Read Jottacloud file as Markdown",
+      description: `Converted the content of ${this.#file.path} to Markdown.`,
+    });
+    return { markdown, sourceMimeType: metadata.mimeType };
+  }
+
   async write(content: ArrayBuffer, ifMatchMd5?: string): Promise<void> {
     const now = Date.now();
     const actionId = this.#kv.get<number>("write:nextId") ?? 1;
@@ -1041,12 +1078,13 @@ export class JottacloudFolderGatekeeperImpl extends DurableObject<Env, Jottaclou
   async startSession(approvalQueue: RpcStub<ApprovalQueue>): Promise<JottacloudFolderSession> {
     const account = this.#userAccount();
     return new JottacloudFolderSessionImpl(
-      approvalQueue.dup(), () => account.getUsername(), this.#backend(), this.#folder(), this.ctx.storage.kv);
+      approvalQueue.dup(), () => account.getUsername(), this.#backend(), this.#folder(),
+      this.ctx.storage.kv, this.env.WORKERS_AI);
   }
 
   /** Approved: perform the deferred upload, re-checking `ifMatchMd5` against the target file's live
    * state (the same check used by the single-file gatekeeper, applied to the targeted file). There
-   * is no cache/simulation overlay to promote or clear here.
+   * is no cache/simulation overlay to promote or clear here. */
   async applyAction(actionId: number): Promise<void> {
     const key = `write:pending:${actionId}`;
     const pending = this.ctx.storage.kv.get<PendingFolderWrite>(key);
@@ -1091,16 +1129,19 @@ export class JottacloudFolderSessionImpl extends RpcTarget implements Jottacloud
   #backend: DirectJottacloudBackend;
   #folder: JottaFilePath;
   #kv: DurableObjectStorage["kv"];
+  #ai: Ai;
 
   constructor(
       approvalQueue: RpcStub<ApprovalQueue>, getUsername: () => Promise<string>,
-      backend: DirectJottacloudBackend, folder: JottaFilePath, kv: DurableObjectStorage["kv"]) {
+      backend: DirectJottacloudBackend, folder: JottaFilePath, kv: DurableObjectStorage["kv"],
+      ai: Ai) {
     super();
     this.#approvalQueue = approvalQueue;
     this.#getUsername = getUsername;
     this.#backend = backend;
     this.#folder = folder;
     this.#kv = kv;
+    this.#ai = ai;
   }
 
   [Symbol.dispose]() {
@@ -1184,6 +1225,22 @@ export class JottacloudFolderSessionImpl extends RpcTarget implements Jottacloud
       description: `Downloaded the current content of ${file.path} (${content.byteLength} bytes).`,
     });
     return content;
+  }
+
+  /** Reuses `getMetadata()`/`read()` the same way `JottacloudFileSession.readAsMarkdown()` does.
+   * The folder resource has no cache of its own (see `src/cache.ts`), so unlike the file
+   * resource's version, there is no Markdown-cache short-circuit here. */
+  async readAsMarkdown(path: string): Promise<JottacloudMarkdownContent> {
+    const file = this.#resolveFile(path);
+    const metadata = await this.getMetadata(path);
+    assertMarkdownConvertible(metadata.mimeType, metadata.size);
+    const content = await this.read(path);
+    const markdown = await convertToMarkdown(this.#ai, metadata.name, metadata.mimeType, content);
+    await this.#approvalQueue.authorizeObservation({
+      title: "Read Jottacloud file as Markdown",
+      description: `Converted the content of ${file.path} to Markdown.`,
+    });
+    return { markdown, sourceMimeType: metadata.mimeType };
   }
 
   /**

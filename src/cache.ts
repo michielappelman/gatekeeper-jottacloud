@@ -26,12 +26,17 @@ export const CACHE_TTL_MS = 30_000;
 /** Content above this size is not cached. */
 export const CACHE_CONTENT_MAX_BYTES = 1_000_000;
 
+/** Converted Markdown above this length (in UTF-16 code units) is not cached. */
+export const CACHE_MARKDOWN_MAX_CHARS = 2_000_000;
+
 const METADATA_KEY = "cache:metadata";
 const CONTENT_KEY = "cache:content";
+const MARKDOWN_KEY = "cache:markdown";
 const SIMULATED_KEY = "sim:latest";
 
 type CachedMetadata = { metadata: FileMetadata; fetchedAt: number };
 type CachedContent = { md5: string; content: ArrayBuffer; fetchedAt: number };
+type CachedMarkdown = { md5: string; markdown: string; sourceMimeType: string; fetchedAt: number };
 export type SimulatedWrite = { actionId: number; metadata: FileMetadata };
 
 export function getCachedMetadata(kv: CacheKv, now: number): FileMetadata | undefined {
@@ -61,6 +66,29 @@ export function getCachedContent(kv: CacheKv, now: number): { md5: string; conte
 export function putCachedContent(kv: CacheKv, md5: string, content: ArrayBuffer, now: number): void {
   if (content.byteLength > CACHE_CONTENT_MAX_BYTES) return;
   kv.put<CachedContent>(CONTENT_KEY, { md5, content, fetchedAt: now });
+}
+
+/**
+ * Returns fresh cached Markdown and the content MD5 it was converted from, or `undefined` if
+ * nothing fresh is cached. Callers cross-check the returned `md5` against the file's current MD5
+ * the same way {@link getCachedContent}'s callers do, since conversion is content-addressed: a
+ * changed file gets a new MD5 and simply misses rather than serving stale Markdown.
+ */
+export function getCachedMarkdown(
+  kv: CacheKv, now: number,
+): { md5: string; markdown: string; sourceMimeType: string } | undefined {
+  const cached = kv.get<CachedMarkdown>(MARKDOWN_KEY);
+  if (!cached || now - cached.fetchedAt >= CACHE_TTL_MS) return undefined;
+  return { md5: cached.md5, markdown: cached.markdown, sourceMimeType: cached.sourceMimeType };
+}
+
+/** No-ops for Markdown over {@link CACHE_MARKDOWN_MAX_CHARS}, the same way {@link putCachedContent}
+ * withholds oversized content -- still returned to the caller, just not retained. */
+export function putCachedMarkdown(
+  kv: CacheKv, value: { md5: string; markdown: string; sourceMimeType: string }, now: number,
+): void {
+  if (value.markdown.length > CACHE_MARKDOWN_MAX_CHARS) return;
+  kv.put<CachedMarkdown>(MARKDOWN_KEY, { ...value, fetchedAt: now });
 }
 
 export function getSimulatedWrite(kv: CacheKv): SimulatedWrite | undefined {

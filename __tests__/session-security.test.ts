@@ -62,6 +62,12 @@ function mapKv() {
   };
 }
 
+function fakeAi(toMarkdown: (...args: unknown[]) => unknown = vi.fn(async () => (
+  { id: "1", name: "f", mimeType: "application/pdf", format: "markdown" as const, tokens: 1, data: "# md" }
+))): Ai {
+  return { toMarkdown } as unknown as Ai;
+}
+
 function fakeApprovalQueue() {
   const observations: unknown[] = [];
   const actions: { id: number; description: unknown }[] = [];
@@ -83,7 +89,7 @@ describe("JottacloudFileSessionImpl", () => {
     const kv = new Map<string, unknown>();
     const session = new JottacloudFileSessionImpl(
       stub as never, {} as never, async () => "alice", backend as never, file,
-      { get: (k: string) => kv.get(k), put: (k: string, v: unknown) => kv.set(k, v) } as never);
+      { get: (k: string) => kv.get(k), put: (k: string, v: unknown) => kv.set(k, v) } as never, {} as never);
 
     const result = await session.getMetadata();
     expect(result.md5).toBe("m1");
@@ -95,7 +101,7 @@ describe("JottacloudFileSessionImpl", () => {
     const backend = fakeBackend({ read: vi.fn(async () => new TextEncoder().encode("data").buffer) });
     const session = new JottacloudFileSessionImpl(
       stub as never, {} as never, async () => "alice", backend as never, file,
-      { get: () => undefined, put: () => {} } as never);
+      { get: () => undefined, put: () => {} } as never, {} as never);
 
     await session.read();
     expect(observations).toHaveLength(1);
@@ -107,7 +113,7 @@ describe("JottacloudFileSessionImpl", () => {
     const kv = new Map<string, unknown>();
     const session = new JottacloudFileSessionImpl(
       stub as never, {} as never, async () => "alice", backend as never, file,
-      { get: (k: string) => kv.get(k), put: (k: string, v: unknown) => kv.set(k, v) } as never);
+      { get: (k: string) => kv.get(k), put: (k: string, v: unknown) => kv.set(k, v) } as never, {} as never);
 
     await session.write(new ArrayBuffer(4), "md5-at-read-time");
     expect(backend.write).not.toHaveBeenCalled();
@@ -122,7 +128,7 @@ describe("JottacloudFileSessionImpl", () => {
     const kv = new Map<string, unknown>();
     const session = new JottacloudFileSessionImpl(
       stub as never, {} as never, async () => "alice", backend as never, file,
-      { get: (k: string) => kv.get(k), put: (k: string, v: unknown) => kv.set(k, v), delete: (k: string) => kv.delete(k) } as never);
+      { get: (k: string) => kv.get(k), put: (k: string, v: unknown) => kv.set(k, v), delete: (k: string) => kv.delete(k) } as never, {} as never);
 
     await expect(session.write(new ArrayBuffer(4))).rejects.toThrow("denied");
     expect(kv.has("write:pending:1")).toBe(false);
@@ -135,7 +141,7 @@ describe("JottacloudFileSessionImpl", () => {
     });
     const session = new JottacloudFileSessionImpl(
       stub as never, {} as never, async () => "alice", backend as never, file,
-      { get: () => undefined, put: () => {} } as never);
+      { get: () => undefined, put: () => {} } as never, {} as never);
 
     await expect(session.getMetadata()).rejects.toThrow(/reconnect/i);
   });
@@ -146,7 +152,7 @@ describe("JottacloudFileSessionImpl caching and simulation", () => {
     const { stub } = fakeApprovalQueue();
     const backend = fakeBackend({ getMetadata: vi.fn(async () => metadata({ md5: "m1" })) });
     const { kv } = mapKv();
-    const session = new JottacloudFileSessionImpl(stub as never, {} as never, async () => "alice", backend as never, file, kv as never);
+    const session = new JottacloudFileSessionImpl(stub as never, {} as never, async () => "alice", backend as never, file, kv as never, {} as never);
 
     await session.getMetadata();
     const second = await session.getMetadata();
@@ -158,7 +164,7 @@ describe("JottacloudFileSessionImpl caching and simulation", () => {
     const { stub } = fakeApprovalQueue();
     const backend = fakeBackend({ read: vi.fn(async () => new TextEncoder().encode("data").buffer) });
     const { kv } = mapKv();
-    const session = new JottacloudFileSessionImpl(stub as never, {} as never, async () => "alice", backend as never, file, kv as never);
+    const session = new JottacloudFileSessionImpl(stub as never, {} as never, async () => "alice", backend as never, file, kv as never, {} as never);
 
     const first = await session.read();
     const second = await session.read();
@@ -174,7 +180,7 @@ describe("JottacloudFileSessionImpl caching and simulation", () => {
       getMetadata: vi.fn(async () => metadata({ md5: "v2-md5" })),
     });
     const { kv } = mapKv();
-    const session = new JottacloudFileSessionImpl(stub as never, {} as never, async () => "alice", backend as never, file, kv as never);
+    const session = new JottacloudFileSessionImpl(stub as never, {} as never, async () => "alice", backend as never, file, kv as never, {} as never);
 
     await session.read(); // caches "v1" content under its own (different) MD5
     await session.getMetadata(); // reveals the file is now at v2-md5
@@ -192,7 +198,7 @@ describe("JottacloudFileSessionImpl caching and simulation", () => {
     const { stub } = fakeApprovalQueue();
     const backend = fakeBackend();
     const { kv } = mapKv();
-    const session = new JottacloudFileSessionImpl(stub as never, {} as never, async () => "alice", backend as never, file, kv as never);
+    const session = new JottacloudFileSessionImpl(stub as never, {} as never, async () => "alice", backend as never, file, kv as never, {} as never);
 
     const newContent = new TextEncoder().encode("new content").buffer;
     await session.write(newContent, "old-md5");
@@ -212,7 +218,7 @@ describe("JottacloudFileSessionImpl caching and simulation", () => {
     const { stub } = fakeApprovalQueue();
     const backend = fakeBackend();
     const { kv, store } = mapKv();
-    const session = new JottacloudFileSessionImpl(stub as never, {} as never, async () => "alice", backend as never, file, kv as never);
+    const session = new JottacloudFileSessionImpl(stub as never, {} as never, async () => "alice", backend as never, file, kv as never, {} as never);
 
     await session.write(new ArrayBuffer(4));
     expect(store.get("sim:latest")).toBeDefined();
@@ -223,7 +229,7 @@ describe("JottacloudFileSessionImpl caching and simulation", () => {
     stub.submitAction = vi.fn(async () => { throw new Error("denied"); });
     const backend = fakeBackend();
     const { kv, store } = mapKv();
-    const session = new JottacloudFileSessionImpl(stub as never, {} as never, async () => "alice", backend as never, file, kv as never);
+    const session = new JottacloudFileSessionImpl(stub as never, {} as never, async () => "alice", backend as never, file, kv as never, {} as never);
 
     await expect(session.write(new ArrayBuffer(4))).rejects.toThrow("denied");
     expect(store.get("sim:latest")).toBeUndefined();
@@ -239,7 +245,7 @@ describe("JottacloudFileSessionImpl caching and simulation", () => {
     const confirmed = metadata({ md5: "confirmed-md5", size: 11 });
     const backend = fakeBackend({ write: vi.fn(async () => confirmed) });
     const { kv, store } = mapKv();
-    const session = new JottacloudFileSessionImpl(stub as never, {} as never, async () => "alice", backend as never, file, kv as never);
+    const session = new JottacloudFileSessionImpl(stub as never, {} as never, async () => "alice", backend as never, file, kv as never, {} as never);
 
     const content = new TextEncoder().encode("new content").buffer;
     await session.write(content);
@@ -260,5 +266,91 @@ describe("JottacloudFileSessionImpl caching and simulation", () => {
     const afterApply = await session.getMetadata();
     expect(afterApply.md5).toBe("confirmed-md5");
     expect(backend.getMetadata).not.toHaveBeenCalled(); // served from the promoted cache
+  });
+});
+
+describe("JottacloudFileSessionImpl.readAsMarkdown", () => {
+  it("converts the file's content and authorizes one observation", async () => {
+    const { stub, observations } = fakeApprovalQueue();
+    const backend = fakeBackend({
+      getMetadata: vi.fn(async () => metadata({ mimeType: "application/pdf" })),
+      read: vi.fn(async () => new TextEncoder().encode("pdf bytes").buffer),
+    });
+    const toMarkdown = vi.fn(async () => (
+      { id: "1", name: "Guests.xlsx", mimeType: "application/pdf", format: "markdown" as const, tokens: 1, data: "# Guests" }
+    ));
+    const { kv } = mapKv();
+    const session = new JottacloudFileSessionImpl(
+      stub as never, {} as never, async () => "alice", backend as never, file, kv as never, fakeAi(toMarkdown));
+
+    const result = await session.readAsMarkdown();
+    expect(result).toEqual({ markdown: "# Guests", sourceMimeType: "application/pdf" });
+    expect(toMarkdown).toHaveBeenCalledTimes(1);
+    // One observation for getMetadata(), one for read(), one for the conversion itself.
+    expect(observations).toHaveLength(3);
+  });
+
+  it("throws UNSUPPORTED_FOR_MARKDOWN without downloading content or calling toMarkdown", async () => {
+    const { stub } = fakeApprovalQueue();
+    const backend = fakeBackend({ getMetadata: vi.fn(async () => metadata({ mimeType: "image/png" })) });
+    const toMarkdown = vi.fn();
+    const { kv } = mapKv();
+    const session = new JottacloudFileSessionImpl(
+      stub as never, {} as never, async () => "alice", backend as never, file, kv as never, fakeAi(toMarkdown));
+
+    await expect(session.readAsMarkdown()).rejects.toMatchObject({ code: "UNSUPPORTED_FOR_MARKDOWN" });
+    expect(backend.read).not.toHaveBeenCalled();
+    expect(toMarkdown).not.toHaveBeenCalled();
+  });
+
+  it("throws TOO_LARGE_FOR_MARKDOWN without downloading content or calling toMarkdown", async () => {
+    const { stub } = fakeApprovalQueue();
+    const backend = fakeBackend({
+      getMetadata: vi.fn(async () => metadata({ mimeType: "application/pdf", size: 50_000_000 })),
+    });
+    const toMarkdown = vi.fn();
+    const { kv } = mapKv();
+    const session = new JottacloudFileSessionImpl(
+      stub as never, {} as never, async () => "alice", backend as never, file, kv as never, fakeAi(toMarkdown));
+
+    await expect(session.readAsMarkdown()).rejects.toMatchObject({ code: "TOO_LARGE_FOR_MARKDOWN" });
+    expect(backend.read).not.toHaveBeenCalled();
+    expect(toMarkdown).not.toHaveBeenCalled();
+  });
+
+  it("a second call at the same content MD5 is served from the markdown cache, skipping read() and toMarkdown()", async () => {
+    const { stub } = fakeApprovalQueue();
+    const backend = fakeBackend({
+      getMetadata: vi.fn(async () => metadata({ mimeType: "application/pdf", md5: "same-md5" })),
+      read: vi.fn(async () => new TextEncoder().encode("pdf bytes").buffer),
+    });
+    const toMarkdown = vi.fn(async () => (
+      { id: "1", name: "Guests.xlsx", mimeType: "application/pdf", format: "markdown" as const, tokens: 1, data: "# Guests" }
+    ));
+    const { kv } = mapKv();
+    const session = new JottacloudFileSessionImpl(
+      stub as never, {} as never, async () => "alice", backend as never, file, kv as never, fakeAi(toMarkdown));
+
+    const first = await session.readAsMarkdown();
+    const second = await session.readAsMarkdown();
+    expect(second).toEqual(first);
+    expect(backend.read).toHaveBeenCalledTimes(1);
+    expect(toMarkdown).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not affect read()'s raw-bytes contract", async () => {
+    const { stub } = fakeApprovalQueue();
+    const raw = new TextEncoder().encode("pdf bytes").buffer;
+    const backend = fakeBackend({
+      getMetadata: vi.fn(async () => metadata({ mimeType: "application/pdf" })),
+      read: vi.fn(async () => raw),
+    });
+    const { kv } = mapKv();
+    const session = new JottacloudFileSessionImpl(
+      stub as never, {} as never, async () => "alice", backend as never, file, kv as never, fakeAi());
+
+    await session.readAsMarkdown();
+    const rawResult = await session.read();
+    expect(rawResult).toBe(raw);
   });
 });

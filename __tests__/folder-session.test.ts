@@ -51,15 +51,21 @@ function mapKv() {
   };
 }
 
+function fakeAi(toMarkdown: (...args: unknown[]) => unknown = vi.fn(async () => (
+  { id: "1", name: "f", mimeType: "application/pdf", format: "markdown" as const, tokens: 1, data: "# md" }
+))): Ai {
+  return { toMarkdown } as unknown as Ai;
+}
+
 function session(
   backend: JottacloudBackend, boundFolder: JottaFilePath = folder,
-  approvalQueue = fakeApprovalQueue(), kv = mapKv(),
+  approvalQueue = fakeApprovalQueue(), kv = mapKv(), ai: Ai = {} as never,
 ) {
   return {
     approvalQueue,
     kv,
     session: new JottacloudFolderSessionImpl(
-      approvalQueue.stub as never, async () => "alice", backend, boundFolder, kv.kv as never),
+      approvalQueue.stub as never, async () => "alice", backend, boundFolder, kv.kv as never, ai),
   };
 }
 
@@ -155,6 +161,51 @@ describe("JottacloudFolderSessionImpl.getMetadata / read", () => {
     });
     const { session: s } = session(backend);
     await expect(s.getMetadata("Guests.xlsx")).rejects.toThrow(/reconnect/i);
+  });
+});
+
+describe("JottacloudFolderSessionImpl.readAsMarkdown", () => {
+  it("resolves the relative path, converts the content, and authorizes an observation", async () => {
+    const backend = fakeBackend({
+      getMetadata: vi.fn(async () => fileMetadata({ mimeType: "application/pdf" })),
+      read: vi.fn(async () => new TextEncoder().encode("pdf bytes").buffer),
+    });
+    const toMarkdown = vi.fn(async () => (
+      { id: "1", name: "Guests.xlsx", mimeType: "application/pdf", format: "markdown" as const, tokens: 1, data: "# Guests" }
+    ));
+    const { session: s, approvalQueue } = session(backend, folder, fakeApprovalQueue(), mapKv(), fakeAi(toMarkdown));
+
+    const result = await s.readAsMarkdown("Guests.xlsx");
+    expect(result).toEqual({ markdown: "# Guests", sourceMimeType: "application/pdf" });
+    expect(backend.read).toHaveBeenCalledWith(
+      "alice", { device: "Jotta", mountpoint: "Sync", path: "Documents/Guests.xlsx" });
+    expect(approvalQueue.observations).toHaveLength(3); // getMetadata, read, conversion
+  });
+
+  it("throws UNSUPPORTED_FOR_MARKDOWN without downloading content", async () => {
+    const backend = fakeBackend({ getMetadata: vi.fn(async () => fileMetadata({ mimeType: "image/png" })) });
+    const { session: s } = session(backend);
+    await expect(s.readAsMarkdown("Guests.xlsx")).rejects.toMatchObject({ code: "UNSUPPORTED_FOR_MARKDOWN" });
+    expect(backend.read).not.toHaveBeenCalled();
+  });
+
+  it("rejects a traversal attempt before ever calling the backend", async () => {
+    const backend = fakeBackend();
+    const { session: s } = session(backend);
+    await expect(s.readAsMarkdown("../secrets.txt")).rejects.toMatchObject({ code: "INVALID_RESOURCE" });
+    expect(backend.getMetadata).not.toHaveBeenCalled();
+  });
+
+  it("does not affect read()'s raw-bytes contract", async () => {
+    const raw = new TextEncoder().encode("pdf bytes").buffer;
+    const backend = fakeBackend({
+      getMetadata: vi.fn(async () => fileMetadata({ mimeType: "application/pdf" })),
+      read: vi.fn(async () => raw),
+    });
+    const { session: s } = session(backend, folder, fakeApprovalQueue(), mapKv(), fakeAi());
+    await s.readAsMarkdown("Guests.xlsx");
+    const rawResult = await s.read("Guests.xlsx");
+    expect(rawResult).toBe(raw);
   });
 });
 

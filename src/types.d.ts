@@ -14,6 +14,14 @@ export type JottacloudFileMetadata = {
   modifiedAt: Date;
 };
 
+/** Result of converting a file's content to Markdown. */
+export type JottacloudMarkdownContent = {
+  /** The converted content. */
+  markdown: string;
+  /** The MIME type the original content was converted from. */
+  sourceMimeType: string;
+};
+
 /**
  * Read-write access to one Jottacloud file. The file was chosen when this connection was created
  * and cannot be changed from here — there is no method that takes a different path or file ID.
@@ -24,6 +32,15 @@ export interface JottacloudFileSession {
 
   /** Downloads the file's current content. */
   read(): Promise<ArrayBuffer>;
+
+  /**
+   * Downloads the file's current content and converts it to Markdown — HTML, PDF, and common
+   * office/document formats (Word, Excel, OpenDocument, Apple Numbers) become readable text.
+   * Throws with code `UNSUPPORTED_FOR_MARKDOWN` if the file's recorded MIME type cannot be
+   * converted, or `TOO_LARGE_FOR_MARKDOWN` if it is too large — check `getMetadata()` first, or
+   * call `read()` instead, if either is a possibility.
+   */
+  readAsMarkdown(): Promise<JottacloudMarkdownContent>;
 
   /**
    * Replaces the file's content by uploading a new revision, preserving Jottacloud's version
@@ -94,6 +111,10 @@ export interface JottacloudFolderSession {
 
   /** Downloads one file's current content. */
   read(path: string): Promise<ArrayBuffer>;
+
+  /** Downloads one file's current content and converts it to Markdown, the same as
+   * `JottacloudFileSession.readAsMarkdown()` does for a bound single file. */
+  readAsMarkdown(path: string): Promise<JottacloudMarkdownContent>;
 
   /**
    * Writes `path`'s content, creating it (and preserving history for updates the same way
