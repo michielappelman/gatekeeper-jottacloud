@@ -39,7 +39,8 @@ pnpm install
 
 The starter must include `packages/*` in `pnpm-workspace.yaml`. Its deployment should:
 
-1. Use this package's `wrangler.jsonc` as the base Worker configuration.
+1. Use this package's `wrangler.jsonc` as the base Worker configuration. It is generated from
+   `cloudflare.config.ts`: edit that, then run `pnpm configs:generate` from the starter root.
 2. Set the deployed Worker name, service bindings, `BASE_URL`, and observability settings.
 3. Build the package before deploying it.
 4. Deploy it before the Workshop and Router, which consume its service binding.
