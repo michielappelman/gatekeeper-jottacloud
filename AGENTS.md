@@ -17,13 +17,13 @@ implementation constraints that are easy to miss.
 
 ## Related repositories
 
-- [Cloudflare OS starter](https://github.com/cloudflare/cloudflare-os-starter): the consuming
+- [Cloudflare OS starter](https://github.com/michielappelman/cloudflare-os-starter): the consuming
   workspace and deployment host. In this workspace it is normally available at
   `../cloudflare-os-starter/`.
-- [`@gadgets/gatekeeper-kit`](../cloudflare-os-starter/cloudflare-os/packages/gatekeeper-kit/): the
-  shared Gatekeeper library used for connect pages, credential staging/refresh, nonces, and other
-  Worker plumbing. Read its `AGENTS.md`, `README.md`, and `USAGE.md` before changing those
-  integrations.
+- [`@gadgets/gatekeeper-kit`](https://github.com/michielappelman/cloudflare-os/tree/main/packages/gatekeeper-kit):
+  the shared Gatekeeper library used for connect pages, credential staging/refresh, nonces, and
+  other Worker plumbing. Use the copy pinned by the starter (`../cloudflare-os-starter/cloudflare-os/packages/gatekeeper-kit/`).
+  Read its `AGENTS.md`, `README.md`, and `USAGE.md` before changing those integrations.
 - [rclone's Jottacloud backend](https://github.com/rclone/rclone/tree/master/backend/jottacloud):
   the protocol reference for the undocumented Jottacloud HTTP/XML shapes. Keep that dependency
   isolated in `src/jottacloud/` and verify changes with mocked-fetch tests.
