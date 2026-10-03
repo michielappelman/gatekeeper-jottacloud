@@ -5,7 +5,7 @@ async function noopSleep(): Promise<void> {}
 
 describe("RETRYABLE_STATUSES", () => {
   it("matches rclone's Jottacloud retryErrorCodes exactly", () => {
-    expect([...RETRYABLE_STATUSES].sort((a, b) => a - b)).toEqual([429, 500, 502, 503, 504, 509]);
+    expect([...RETRYABLE_STATUSES].toSorted((a, b) => a - b)).toEqual([429, 500, 502, 503, 504, 509]);
   });
 });
 

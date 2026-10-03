@@ -3,8 +3,6 @@ import {
   DEFAULT_DEVICE,
   DEFAULT_MOUNTPOINT,
   isFolderResourceUrl,
-  JOTTACLOUD_FILE_RESOURCE,
-  JOTTACLOUD_FOLDER_RESOURCE,
   normalizeFilePath,
   normalizeFolderPath,
   parseFolderResourceUrl,

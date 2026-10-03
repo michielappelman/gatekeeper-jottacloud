@@ -3,7 +3,7 @@
  * Jottacloud protocol isolated from the resource and permission model.
  */
 
-import { errorForStatus, JottacloudError } from "./errors";
+import { JottacloudError } from "./errors";
 import { downloadFile, getMetadata, listFolder, type AccessTokenSource, type FolderListEntry } from "./jfs";
 import { md5Hex } from "./md5";
 import { allocateUpload, uploadContent } from "./upload";

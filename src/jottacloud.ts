@@ -650,7 +650,7 @@ export class JottacloudFileConfiguratorUI extends RpcTarget implements Jottaclou
     const { dirPath, prefix, entries } = await listJottaDirectory(this.account, this.fetchImpl, device, mountpoint, query);
     return entries
       .filter(entry => !entry.deleted && (!prefix || entry.name.toLowerCase().includes(prefix)))
-      .sort((a, b) => (a.kind !== b.kind ? (a.kind === "folder" ? -1 : 1) : a.name.localeCompare(b.name)))
+      .toSorted((a, b) => (a.kind !== b.kind ? (a.kind === "folder" ? -1 : 1) : a.name.localeCompare(b.name)))
       .slice(0, CONFIGURATOR_OPTION_LIMIT)
       .map(entry => {
         const fullPath = dirPath ? `${dirPath}/${entry.name}` : entry.name;
@@ -681,7 +681,7 @@ export class JottacloudFolderConfiguratorUI extends JottacloudFileConfiguratorUI
     const folders = entries
       .filter(entry => entry.kind === "folder" && !entry.deleted &&
         (!prefix || entry.name.toLowerCase().includes(prefix)))
-      .sort((a, b) => a.name.localeCompare(b.name))
+      .toSorted((a, b) => a.name.localeCompare(b.name))
       .slice(0, CONFIGURATOR_OPTION_LIMIT)
       .map(entry => {
         const fullPath = dirPath ? `${dirPath}/${entry.name}` : entry.name;
@@ -852,7 +852,6 @@ export class JottacloudGatekeeperImpl extends DurableObject<Env, JottacloudGatek
 @validateRpc()
 export class JottacloudFileSessionImpl extends RpcTarget implements JottacloudFileSession {
   #approvalQueue: RpcStub<ApprovalQueue>;
-  #account: DurableObjectStub<UserAccount>;
   #getUsername: () => Promise<string>;
   #backend: DirectJottacloudBackend;
   #file: JottaFilePath;
@@ -865,7 +864,6 @@ export class JottacloudFileSessionImpl extends RpcTarget implements JottacloudFi
       kv: DurableObjectStorage["kv"], ai: Ai) {
     super();
     this.#approvalQueue = approvalQueue;
-    this.#account = account;
     this.#getUsername = getUsername;
     this.#backend = backend;
     this.#file = file;
