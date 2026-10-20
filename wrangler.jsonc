@@ -29,6 +29,12 @@
         "UserAccount",
         "JottacloudGatekeeperImpl"
       ]
+    },
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "JottacloudFolderGatekeeperImpl"
+      ]
     }
   ]
 }

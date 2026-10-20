@@ -21,4 +21,6 @@ export const wrangler = {
 
 export const migrations: DurableObjectMigration[] = [
   { tag: "v0", new_sqlite_classes: ["UserAccount", "JottacloudGatekeeperImpl"] },
+  // Folder bindings shipped without a migration, so the deployed Worker never had this class.
+  { tag: "v1", new_sqlite_classes: ["JottacloudFolderGatekeeperImpl"] },
 ];
