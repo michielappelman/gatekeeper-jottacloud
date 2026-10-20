@@ -1,136 +1,210 @@
-# Jottacloud Gatekeeper
+# Jottacloud
 
-A Cloudflare Worker that gives an agent scoped access to a user's Jottacloud storage through
-Cloudflare OS. A connection grants either one file or one folder; it never grants the whole
-account.
+Jottacloud is a Cloudflare OS gatekeeper that gives the agent and gadgets access to one folder or
+one file in a user's [Jottacloud](https://www.jottacloud.com) storage. The agent can list, read and
+search through a folder, convert documents to Markdown, and write new revisions or new files. Every
+write waits for the user's approval; reads are recorded.
 
+A user connects an account by pasting a Jottacloud personal login token. There is no OAuth flow and
+no deployment-wide secret. A connection never covers the whole account.
+
+## What a connection can do
+
+| Capability | Methods | Needs approval |
+|---|---|---|
+| Browse a folder (folder binding) | `getScope`, `list` | No (recorded) |
+| Read a file | `getMetadata`, `read` | No (recorded) |
+| Read a document as text | `readAsMarkdown` | No (recorded) |
+| Update a file | `write` (a new revision of an existing file) | Yes, always by a person |
+| Create a file (folder binding) | `write` to a path that does not exist yet | Yes, always by a person |
+
+What a connection gets depends on what the user picks when connecting:
+
+- **A folder** (or a whole mountpoint such as Sync or Archive) gives a `JottacloudFolderSession`:
+  every file and subfolder below it, including anything added later. Paths are relative to the
+  folder and can never leave it.
+- **A file** gives a `JottacloudFileSession`: that one file. Its methods take no path, so the
+  binding cannot be pointed at anything else.
+
+## Connecting an account
+
+1. Sign in at [jottacloud.com](https://www.jottacloud.com/web/secure), open your account's
+   security settings, and generate a **personal login token**. A token is usable once.
+2. Paste it into the gatekeeper's connect form.
+3. Choose what to connect in the picker (see below).
+
+On connect, `UserAccount` exchanges the login token for an access and refresh token at the token's
+own issuer, then discards the login token. Only the resulting grant is stored, in the `UserAccount`
+Durable Object, and it never reaches an agent-facing object. Access tokens are refreshed
+automatically; if the refresh token is rejected, the Workshop is told through
+`GatekeeperConnectCallback.credentialsExpired()` and the user reconnects with a new login token.
+
+**White-label providers.** The token carries its own issuer, so the same flow works for Jottacloud's
+resellers (MediaMarkt Cloud, Elkjøp, Elgiganten, Telia Sky, Tele2 Cloud and others). Generate the
+token from your provider's account settings instead of jottacloud.com.
+
+## Choosing what to connect
+
+Both resource types share one connect card, titled Jottacloud, and one picker:
+
+- **Top level:** the mountpoints of the built-in `Jotta` device, the one Jottacloud's own web and
+  mobile apps use (typically Sync and Archive).
+- **Other devices:** separately registered desktop or backup clients, under "Other devices". It
+  only appears when the account has any.
+- **Folders and files** below each mountpoint, folders first.
+
+A mountpoint or folder connects as a folder, a file as a file. The account itself cannot be chosen.
+The search box filters the open folder by name. It also takes a pasted path such as
+`Sync/Events/Guests.xlsx` (on the `Jotta` device) or a resource URL, and jumps to what it names.
+When an agent asks for a specific file or folder, the picker opens on it; if it no longer exists,
+nothing is selected.
+
+## Agent API
+
+The full contract lives in [`src/types.d.ts`](src/types.d.ts). A folder binding is suggested as
+`JOTTACLOUD_FOLDER`, a file binding as `JOTTACLOUD_FILE`.
+
+```js
+export default async function(self, env) {
+  // list() is one level deep: pass a folder entry's path back in to descend.
+  const entries = await env.JOTTACLOUD_FOLDER.list("Reports");
+  const latest = entries
+    .filter((e) => !e.isFolder && e.name.endsWith(".xlsx"))
+    .sort((a, b) => b.modifiedAt - a.modifiedAt)[0];
+
+  // HTML, PDF, Word, Excel, OpenDocument and Numbers files convert to Markdown.
+  const { markdown } = await env.JOTTACLOUD_FOLDER.readAsMarkdown(latest.path);
+
+  // Pass the MD5 you read to refuse the write if the file changed in the meantime.
+  const notes = "Reports/summary.md";
+  const { md5 } = await env.JOTTACLOUD_FOLDER.getMetadata(notes);
+  await env.JOTTACLOUD_FOLDER.write(notes, new TextEncoder().encode(markdown).buffer, md5);
+}
 ```
-Agent → Cloudflare OS → Jottacloud Gatekeeper → Jottacloud JFS/API
+
+A file binding has the same reads and `write(content, ifMatchMd5?)`, without the path argument.
+
+Errors carry a stable `code`, such as `RESOURCE_NOT_FOUND`, `INVALID_RESOURCE` (a path that would
+leave the folder), `FILE_CHANGED`, `UNSUPPORTED_FOR_MARKDOWN` or `TOO_LARGE_FOR_MARKDOWN` (over
+10 MiB).
+
+## How a write runs
+
+1. `write()` validates the path against the binding, stores the content, and submits the action to
+   the session's `ApprovalQueue`. It returns once the action is queued, not once it is uploaded.
+2. The approval shows the file's path, its size, and whether the write is conditional on an MD5.
+3. On a file binding, reads reflect the pending write until it is approved or rejected. On a folder
+   binding they keep showing the current content.
+4. On approval, the gatekeeper re-checks `ifMatchMd5` against the file's live state and uploads a
+   new revision to the same path. A mismatch fails with `FILE_CHANGED` and uploads nothing.
+
+There is no auto-approval: `getAutoApprovableActions()` is empty, so every write waits for a person.
+An upload adds a revision instead of replacing the file, so Jottacloud's version history keeps the
+previous content. Approved writes are not reverted through the gatekeeper; restore an older
+revision in Jottacloud instead.
+
+## Security
+
+- **Token isolation.** The login token is used once and never stored. The access and refresh
+  tokens live only in `UserAccount`; sessions never hold them.
+- **Capability boundary.** A binding's device, mountpoint and path live in its resource URL, which
+  `src/resource.ts` parses strictly: wrong hosts, empty segments, `.` and `..` are refused. Every
+  folder-session path goes through `resolveWithinFolder()`, so an agent cannot reach outside the
+  bound folder. File URLs use `/jfs/` and folder URLs `/jfs-folder/`, so the right Durable Object is
+  chosen from the URL alone, without a lookup.
+- **The picker.** Node ids are the resource URLs that bind them. The configurator returns the chosen
+  id unchanged, and the same strict parsers decide what gets bound.
+- **Observers.** Bindings are private to the person who connected them: Jottacloud has no
+  per-user permission to check a second account against, so `addObserver()` always throws.
+- **Concurrency.** Jottacloud has no atomic compare-and-swap, so a small race remains between the
+  `ifMatchMd5` check and the upload.
+
+## Why talk to JFS directly
+
+Jottacloud publishes no supported developer API. The gatekeeper speaks its JFS HTTP/XML protocol
+directly, with the shapes cross-checked against
+[rclone's Jottacloud backend](https://github.com/rclone/rclone/tree/master/backend/jottacloud).
+That protocol code is isolated in `src/jottacloud/`, behind the `JottacloudBackend` interface, and
+covered by mocked-fetch tests. Upstream failures map to stable `JottacloudErrorCode` values, so
+session code never branches on raw response bodies.
+
+```text
+src/
+  jottacloud/     Auth, JFS metadata/content/listing, upload, retry, errors
+  resource.ts     Resource URL formats and path containment
+  cache.ts        File cache and pending-write simulation
+  markdown.ts     Markdown conversion through Workers AI
+  configurator/   The folder-or-file picker and its RPC types
+  types.d.ts      Agent-facing session interfaces
+  jottacloud.ts   Worker entrypoint, Durable Objects, connect flow, sessions, picker RPC
 ```
 
-## Resources
+## Deployment
 
-| Resource | Scope | Session API |
-| --- | --- | --- |
-| `JOTTACLOUD_FILE_RESOURCE` | One fixed file | `getMetadata()`, `read()`, `write()` |
-| `JOTTACLOUD_FOLDER_RESOURCE` | One folder and its descendants | `getScope()`, `list()`, `getMetadata()`, `read()`, `write()` |
+This repository is consumed as a Git submodule by a
+[`cloudflare-os-starter`](https://github.com/cloudflare/cloudflare-os-starter)-style deployment. It
+is not an npm package: its `@gadgets/*` dependencies resolve from the Cloudflare OS workspace pinned
+in the starter, which keeps the Gatekeeper Kit ABI aligned with the deployment.
 
-File sessions do not accept a path, so they cannot be retargeted. Folder session paths are relative
-to the bound folder, are checked for traversal, and can never escape that folder. `list()` returns
-immediate children only; call it again with a returned folder path to descend.
-
-Both types share one connect card, titled Jottacloud (`JOTTACLOUD_FILE_RESOURCE` is grouped with
-the folder type), and one picker: the default `Jotta` device's mountpoints at the top, any other
-devices under "Other devices", then folders and files. A mountpoint or folder binds as a folder,
-a file as a file; the account itself cannot be chosen. The search box filters the open location by
-name, or takes a pasted `<mountpoint>/<path>` or resource URL and jumps to what it names.
-
-Writes are sent through the normal approval queue. Neither resource has auto-approvable actions,
-and bindings are private to the user who connected the Jottacloud account.
-
-## Connect and deploy
-
-This repository is intended to be consumed as a Git submodule by a
-[`cloudflare-os-starter`](https://github.com/cloudflare/cloudflare-os-starter)-style deployment.
-It is not a standalone npm package: its `@gadgets/*` dependencies come from the consuming
-Cloudflare OS workspace.
-
-From the starter root:
+From the root of the starter:
 
 ```sh
-git submodule add git@github.com:michielappelman/gatekeeper-jottacloud.git packages/gatekeeper-jottacloud
+git submodule add https://github.com/michielappelman/gatekeeper-jottacloud.git packages/gatekeeper-jottacloud
 git submodule update --init --recursive
 pnpm install
 ```
 
-The starter must include `packages/*` in `pnpm-workspace.yaml`. Its deployment should:
+The starter must include `packages/*` in `pnpm-workspace.yaml`, and its deploy wrapper must treat
+`packages/gatekeeper-jottacloud` as the Jottacloud Worker package:
 
-1. Use this package's `wrangler.jsonc` as the base Worker configuration. It is generated from
+1. Use this package's `wrangler.jsonc` as the base config. It is generated from
    `cloudflare.config.ts`: edit that, then run `pnpm configs:generate` from the starter root.
-2. Set the deployed Worker name, service bindings, `BASE_URL`, and observability settings.
-3. Build the package before deploying it.
+2. Generate the production config with the deployment's account, Worker name, service bindings,
+   `BASE_URL`, and observability settings.
+3. Run `vp run -F gatekeeper-jottacloud --no-cache build` before deploying the Worker.
 4. Deploy it before the Workshop and Router, which consume its service binding.
-5. Pin the submodule commit in the starter's deployment inventory.
+5. Pin the submodule commit in the starter and record it in the deployment inventory.
 
-The public Router is the only route. The Jottacloud Worker does not need a public or preview URL,
-and no deployment-wide Jottacloud secret is required.
+What the Worker needs:
 
-Users connect by pasting a personal Jottacloud login token into the Worker flow. The raw token is
-exchanged server-side and is not stored; the resulting credential grant is kept in the account
-Durable Object. The same flow supports Jottacloud white-label providers such as MediaMarkt Cloud,
-Elkjøp, and Telia because the token carries its own issuer information.
+- **Bindings.** `WORKERS_AI` (Workers AI, for `readAsMarkdown()`), and SQLite-backed Durable
+  Objects. Compatibility flags `nodejs_compat` and `allow_irrevocable_stub_storage`.
+- **`BASE_URL`.** The public URL the router serves the gatekeeper on, for example
+  `https://os.example.com/gatekeeper/jottacloud`, used for the connect form.
+- **No secrets.** Each user pastes their own login token.
+- **Routing.** The public router is the only route: the Worker needs no `workers.dev` or preview
+  URL.
 
-For local development and tests, run from the consuming starter after initializing the submodule:
+### Development
+
+Run tests and type checks from the consuming starter once the Cloudflare OS submodule is
+initialized:
 
 ```sh
 pnpm --filter gatekeeper-jottacloud test:run
 pnpm --filter gatekeeper-jottacloud types:check
 ```
 
-Keep the starter and this submodule pinned together. When either changes, run the package tests,
-the starter type check, and the full starter check before updating the submodule reference.
+Tests use mocked `fetch` and need no Jottacloud account. Keep the Cloudflare OS submodule and this
+gatekeeper pinned together: if either changes, run the gatekeeper tests, the starter's type checks,
+and the full starter check before updating the submodule gitlinks. Implementation invariants for
+contributors and agents are in [AGENTS.md](AGENTS.md).
 
-## Behavior and security
+## Known limits
 
-- A file binding identifies `{device, mountpoint, path}` in its resource URL. A folder binding uses
-  the same addressing scheme under the separate `jfs-folder` URL prefix.
-- Resource URLs and folder-relative paths reject empty segments, `.` and `..`, wrong hosts, and
-  malformed paths.
-- A write uploads a new revision to the existing Jottacloud path. It does not delete and recreate
-  the file, so Jottacloud's revision history remains available.
-- Pass the MD5 from an earlier `getMetadata()` or `read()` as `ifMatchMd5` for optimistic
-  concurrency. The check is repeated when an approved write is applied; a mismatch returns
-  `FILE_CHANGED`. Jottacloud provides no atomic compare-and-swap operation, so a small race remains
-  between the check and upload.
-- File metadata and content are cached for 30 seconds. Content larger than 1 MB is not retained in
-  the cache. A pending file write is simulated for reads until it is approved or rejected.
-- Folder reads and listings are not cached, and pending folder writes are not simulated yet.
-- Credential expiry is surfaced as a reconnect request. Revoking a connection removes the local
-  credentials; Jottacloud's own device/session controls can be used for any provider-side cleanup.
+- **Folder bindings are untested live.** File bindings have been exercised end to end against a
+  real account (connect, pick, read, write); folder bindings and the picker have unit coverage only.
+- **Folders are not cached.** File metadata and content are cached for 30 seconds (content over
+  1 MB is not kept); folder listings and reads always go to Jottacloud, and a pending folder write
+  is not shown to later reads.
+- **No search.** JFS has no server-side search: the picker filters one folder at a time, and the
+  agent descends with `list()`.
+- **No revision restore.** Recover an older version in Jottacloud's own revision history.
+- **Token rotation is a reconnect.** A rejected refresh token needs a new personal login token.
+- **Not an identity provider.** `getAuthenticatedEmail()` returns `null`.
+- **Untrusted content.** File contents come from wherever the files came from. An agent that reads
+  them can meet a prompt injection.
 
-## Implementation
+## License
 
-The direct Jottacloud protocol is isolated behind `JottacloudBackend`. Jottacloud does not publish
-a supported public developer API, so the HTTP/XML shapes are cross-checked against rclone's
-Jottacloud backend and protected by mocked-fetch tests. Keep protocol changes in `src/jottacloud/`
-and session/resource behavior in the surrounding gatekeeper layers.
-
-```text
-src/
-  jottacloud/           HTTP auth, JFS metadata/content/listing, upload, retry, errors
-  resource.ts           Resource URL formats and path/containment validation
-  cache.ts              File cache and pending-write simulation
-  configurator/         The folder-or-file picker UI and its RPC types
-  types.d.ts            Agent-facing file and folder session interfaces
-  jottacloud.ts         Worker entrypoint, Durable Objects, connect flow, and sessions
-__tests__/               Protocol, resource, session, configurator, and cache tests
-```
-
-Important implementation boundaries:
-
-- `JottacloudGatekeeperImpl` owns one file binding; `JottacloudFolderGatekeeperImpl` owns one
-  folder binding.
-- `UserAccount` owns credentials and token refresh. Credentials never reach the agent session.
-- `DirectJottacloudBackend` is the production backend. `JottacloudBackend` is the seam used by
-  session tests and future protocol changes.
-- The configurator (`JottacloudConfiguratorUI`) lists devices, mountpoints, and one directory
-  level at a time through JFS. Picker node ids are the resource URLs that bind them, so the
-  iframe returns the chosen id as is and the strict parsers still decide what gets bound.
-
-## Testing and status
-
-Run `pnpm test:run` for the package test suite and `pnpm types:check` for TypeScript checks. Tests
-cover authentication and refresh handling, JFS/XML parsing, upload and retry behavior, resource
-URL validation, folder containment, approval bookkeeping, optimistic concurrency, caching, and
-configurator behavior. Protocol tests use mocked `fetch`; they do not require a Jottacloud account.
-
-The file resource has been exercised against a real account through a deployed Worker, including
-connect, configure, read, and write. The folder resource currently has unit coverage only.
-
-Known gaps:
-
-- Live verification of folder connect, list, read, write, and configurator behavior.
-- A live/adversarial deployment test for cross-resource denial.
-- Folder-specific caching and pending-write simulation.
-- Direct revision restore; use Jottacloud's own revision history to recover an older version.
-- End-to-end Durable Object tests through the Cloudflare `ctx.exports` plumbing.
+[MIT](LICENSE)
