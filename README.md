@@ -19,6 +19,12 @@ File sessions do not accept a path, so they cannot be retargeted. Folder session
 to the bound folder, are checked for traversal, and can never escape that folder. `list()` returns
 immediate children only; call it again with a returned folder path to descend.
 
+Both types share one connect card, titled Jottacloud (`JOTTACLOUD_FILE_RESOURCE` is grouped with
+the folder type), and one picker: the default `Jotta` device's mountpoints at the top, any other
+devices under "Other devices", then folders and files. A mountpoint or folder binds as a folder,
+a file as a file; the account itself cannot be chosen. The search box filters the open location by
+name, or takes a pasted `<mountpoint>/<path>` or resource URL and jumps to what it names.
+
 Writes are sent through the normal approval queue. Neither resource has auto-approvable actions,
 and bindings are private to the user who connected the Jottacloud account.
 
@@ -94,7 +100,7 @@ src/
   jottacloud/           HTTP auth, JFS metadata/content/listing, upload, retry, errors
   resource.ts           Resource URL formats and path/containment validation
   cache.ts              File cache and pending-write simulation
-  configurator/         Live device, mountpoint, file, and folder selection UIs
+  configurator/         The folder-or-file picker UI and its RPC types
   types.d.ts            Agent-facing file and folder session interfaces
   jottacloud.ts         Worker entrypoint, Durable Objects, connect flow, and sessions
 __tests__/               Protocol, resource, session, configurator, and cache tests
@@ -107,7 +113,9 @@ Important implementation boundaries:
 - `UserAccount` owns credentials and token refresh. Credentials never reach the agent session.
 - `DirectJottacloudBackend` is the production backend. `JottacloudBackend` is the seam used by
   session tests and future protocol changes.
-- The configurator lists devices, mountpoints, and one directory level at a time through JFS.
+- The configurator (`JottacloudConfiguratorUI`) lists devices, mountpoints, and one directory
+  level at a time through JFS. Picker node ids are the resource URLs that bind them, so the
+  iframe returns the chosen id as is and the strict parsers still decide what gets bound.
 
 ## Testing and status
 

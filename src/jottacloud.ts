@@ -53,11 +53,12 @@ import { DirectJottacloudBackend, JottacloudError, type JottacloudBackend } from
 import { assertMarkdownConvertible, convertToMarkdown } from "./markdown";
 import {
   DEFAULT_DEVICE,
-  DEFAULT_MOUNTPOINT,
   listDevices as fetchJottaDevices,
   listFolder as fetchJottaFolder,
   listMountpoints as fetchJottaMountpoints,
   type FolderListEntry,
+  type JottaDeviceEntry,
+  type JottaMountpointEntry,
 } from "./jottacloud/jfs";
 import { md5Hex } from "./jottacloud/md5";
 import type { FileMetadata, JottaFilePath } from "./jottacloud/types";
@@ -65,6 +66,7 @@ import {
   isFolderResourceUrl,
   JOTTACLOUD_FILE_RESOURCE,
   JOTTACLOUD_FOLDER_RESOURCE,
+  normalizeFolderPath,
   parseFolderResourceUrl,
   parseResourceUrl,
   resolveWithinFolder,
@@ -72,8 +74,12 @@ import {
   toFolderResourceUrl,
   toResourceUrl,
 } from "./resource";
-import type { JottacloudFileConfiguratorRpc } from "./configurator/jottacloud-file-configurator-types";
-import type { JottacloudFolderConfiguratorRpc } from "./configurator/jottacloud-folder-configurator-types";
+import type {
+  JottacloudConfiguratorRpc,
+  JottacloudNode,
+  JottacloudNodeAncestor,
+  JottacloudNodePage,
+} from "./configurator/jottacloud-configurator-types";
 import type {
   JottacloudFileMetadata,
   JottacloudFileSession,
@@ -83,8 +89,7 @@ import type {
   JottacloudMarkdownContent,
 } from "./types";
 import TYPES_CODE from "./types.txt";
-import JOTTACLOUD_FILE_CONFIGURATOR_HTML from "./generated/jottacloud-file-configurator-ui.txt";
-import JOTTACLOUD_FOLDER_CONFIGURATOR_HTML from "./generated/jottacloud-folder-configurator-ui.txt";
+import JOTTACLOUD_CONFIGURATOR_HTML from "./generated/jottacloud-configurator-ui.txt";
 
 type Env = Cloudflare.Env & {
   BASE_URL?: string;
@@ -486,19 +491,15 @@ export class JottacloudGatekeeperUserImpl extends WorkerEntrypoint<Env, Jottaclo
     return { class: this.ctx.exports.JottacloudGatekeeperImpl({ props }), resource: JOTTACLOUD_FILE_RESOURCE };
   }
 
+  /** One picker for the folder card, which the file type is grouped under. */
   async startResourceConfigurator(resourceUrlPattern: string): Promise<ResourceConfiguratorFrame> {
-    if (resourceUrlPattern === JOTTACLOUD_FOLDER_RESOURCE.urlPattern) {
-      return {
-        iframeHtml: JOTTACLOUD_FOLDER_CONFIGURATOR_HTML,
-        ui: new RpcStub(new JottacloudFolderConfiguratorUI(this.#userAccount())),
-      };
-    }
-    if (resourceUrlPattern !== JOTTACLOUD_FILE_RESOURCE.urlPattern) {
+    if (resourceUrlPattern !== JOTTACLOUD_FOLDER_RESOURCE.urlPattern &&
+        resourceUrlPattern !== JOTTACLOUD_FILE_RESOURCE.urlPattern) {
       throw new Error(`Unsupported Jottacloud resource configurator type: ${resourceUrlPattern}`);
     }
     return {
-      iframeHtml: JOTTACLOUD_FILE_CONFIGURATOR_HTML,
-      ui: new RpcStub(new JottacloudFileConfiguratorUI(this.#userAccount())),
+      iframeHtml: JOTTACLOUD_CONFIGURATOR_HTML,
+      ui: new RpcStub(new JottacloudConfiguratorUI(this.#userAccount())),
     };
   }
 
@@ -541,173 +542,212 @@ export class JottacloudVerifier extends WorkerEntrypoint<Env> implements Gatekee
 }
 
 // ---------------------------------------------------------------------------
-// Resource configurator — live device/mountpoint/folder browsing for the sandboxed iframe, backed
-// directly by JFS (bypassing `JottacloudBackend`: this is a connect-time UI convenience, not part
-// of the swappable session-backend contract those methods exist for).
+// Resource configurator — the picker's live device/mountpoint/folder listing for the sandboxed
+// iframe, backed directly by JFS (bypassing `JottacloudBackend`: this is a connect-time UI
+// convenience, not part of the swappable session-backend contract those methods exist for).
 
-type ConfiguratorOption = { value: string; title: string; subtitle?: string; meta?: string };
-
-const CONFIGURATOR_OPTION_LIMIT = 100;
-
-function humanBytes(bytes: number): string | undefined {
-  if (!Number.isFinite(bytes) || bytes <= 0) return undefined;
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let value = bytes;
-  let unitIndex = 0;
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex++;
-  }
-  return `${unitIndex === 0 ? value : value.toFixed(1)} ${units[unitIndex]}`;
-}
-
-function optionMatches(parts: (string | undefined)[], query: string): boolean {
-  const lowerQuery = query.trim().toLowerCase();
-  if (!lowerQuery) return true;
-  const corpus = parts.filter(Boolean).join(" ").toLowerCase();
-  return corpus.includes(lowerQuery);
-}
+const ROOT_NODE_ID = "jottacloud";
+const DEVICES_NODE_ID = "devices";
+const DEVICE_NODE_PREFIX = "device:";
+const NODE_PAGE_SIZE = 100;
 
 /**
- * Shared by `JottacloudFileConfiguratorUI.browse()` and `JottacloudFolderConfiguratorUI
- * .browseFolders()` — a free function rather than a private method, since `#`-private class
- * members are not reachable from a subclass and these two need the exact same directory fetch.
- * Splits `query` on its last "/" into the directory to list (everything before) and a name prefix
- * to filter by (everything after); a `dirPath` that doesn't exist (yet) is treated as empty rather
- * than an error, since that's just where a human mid-typing currently is.
+ * Devices other than the default one. Nobody sees "device" in Jottacloud's own apps, which always
+ * use the built-in "Jotta" device, so its mountpoints are the top level and any others (separately
+ * registered desktop or backup clients) wait one level down.
  */
-async function listJottaDirectory(
-  account: DurableObjectStub<UserAccount>, fetchImpl: typeof fetch,
-  device: string | null | undefined, mountpoint: string | null | undefined, query: string,
-): Promise<{ dirPath: string; prefix: string; entries: FolderListEntry[] }> {
-  const trimmedDevice = (device ?? "").trim() || DEFAULT_DEVICE;
-  const trimmedMountpoint = (mountpoint ?? "").trim() || DEFAULT_MOUNTPOINT;
-  const normalizedQuery = (query ?? "").replace(/^\/+/, "");
-  const lastSlash = normalizedQuery.lastIndexOf("/");
-  const dirPath = lastSlash >= 0 ? normalizedQuery.slice(0, lastSlash) : "";
-  const prefix = (lastSlash >= 0 ? normalizedQuery.slice(lastSlash + 1) : normalizedQuery).toLowerCase();
+const DEVICES_GROUP: JottacloudNodeAncestor = { id: DEVICES_NODE_ID, title: "Other devices", kind: "group" };
 
-  const username = await account.getUsername();
-  try {
-    const entries = await fetchJottaFolder(
-      { device: trimmedDevice, mountpoint: trimmedMountpoint, path: dirPath },
-      username, () => account.getAccessToken(), fetchImpl);
-    return { dirPath, prefix, entries };
-  } catch (error) {
-    if (error instanceof JottacloudError && error.code === "RESOURCE_NOT_FOUND") {
-      return { dirPath, prefix, entries: [] };
-    }
-    throw error;
-  }
+const deviceNodeId = (device: string) => DEVICE_NODE_PREFIX + encodeURIComponent(device);
+
+/** The grouping and device above a device's mountpoints, or nothing for the default device's. */
+function deviceTrail(device: string): JottacloudNodeAncestor[] {
+  return device === DEFAULT_DEVICE ? [] : [DEVICES_GROUP, { id: deviceNodeId(device), title: device, kind: "device" }];
 }
 
+/** Every ancestor of what is in `folder`, from its device down to the folder itself. */
+function trailInto(folder: JottaFilePath): JottacloudNodeAncestor[] {
+  const segments = folder.path ? folder.path.split("/") : [];
+  return [
+    ...deviceTrail(folder.device),
+    { id: toFolderResourceUrl({ ...folder, path: "" }), title: folder.mountpoint, kind: "mountpoint" },
+    ...segments.map((name, index): JottacloudNodeAncestor => ({
+      id: toFolderResourceUrl({ ...folder, path: segments.slice(0, index + 1).join("/") }),
+      title: name,
+      kind: "folder",
+    })),
+  ];
+}
+
+/** A name a resource URL can carry: the parsers refuse an empty, ".", ".." or slashed segment. */
+const isBindableName = (name: string) => name !== "" && name !== "." && name !== ".." && !name.includes("/");
+
+function mountpointNode(device: string, mountpoint: JottaMountpointEntry): JottacloudNode {
+  return {
+    id: toFolderResourceUrl({ device, mountpoint: mountpoint.name, path: "" }),
+    title: mountpoint.name,
+    kind: "mountpoint",
+    size: mountpoint.sizeBytes,
+    path: deviceTrail(device),
+  };
+}
+
+function entryNode(parent: JottaFilePath, entry: FolderListEntry): JottacloudNode {
+  const location = { ...parent, path: parent.path ? `${parent.path}/${entry.name}` : entry.name };
+  const path = trailInto(parent);
+  if (entry.kind === "folder") return { id: toFolderResourceUrl(location), title: entry.name, kind: "folder", path };
+  return {
+    id: toResourceUrl(location),
+    title: entry.name,
+    kind: "file",
+    size: entry.size,
+    mimeType: entry.mimeType || undefined,
+    modifiedTime: Number.isNaN(entry.modifiedAt.getTime()) ? undefined : entry.modifiedAt.toISOString(),
+    path,
+  };
+}
+
+/** The folder above `location` and the name `location` has in it. */
+function splitParent(location: JottaFilePath): { parent: JottaFilePath; name: string } {
+  const slash = location.path.lastIndexOf("/");
+  return {
+    parent: { ...location, path: slash >= 0 ? location.path.slice(0, slash) : "" },
+    name: location.path.slice(slash + 1),
+  };
+}
+
+const isNotFound = (error: unknown) => error instanceof JottacloudError && error.code === "RESOURCE_NOT_FOUND";
+const isInvalidResource = (error: unknown) => error instanceof JottacloudError && error.code === "INVALID_RESOURCE";
+
 @validateRpc()
-export class JottacloudFileConfiguratorUI extends RpcTarget implements JottacloudFileConfiguratorRpc {
-  // `protected`, not `#private`: `JottacloudFolderConfiguratorUI` extends this class purely to
-  // reuse `listDevices`/`listMountpoints`, and a `#private` field is not reachable from a subclass.
-  protected account: DurableObjectStub<UserAccount>;
-  protected fetchImpl: typeof fetch;
+export class JottacloudConfiguratorUI extends RpcTarget implements JottacloudConfiguratorRpc {
+  #account: DurableObjectStub<UserAccount>;
+  #fetchImpl: typeof fetch;
 
   constructor(account: DurableObjectStub<UserAccount>, fetchImpl: typeof fetch = fetch) {
     super();
-    this.account = account;
-    this.fetchImpl = fetchImpl;
+    this.#account = account;
+    this.#fetchImpl = fetchImpl;
   }
 
-  async listDevices(query: string): Promise<ConfiguratorOption[]> {
-    const username = await this.account.getUsername();
-    const devices = await fetchJottaDevices(username, () => this.account.getAccessToken(), this.fetchImpl);
-    return devices
-      .filter(device => optionMatches([device.name, device.displayName, device.type], query))
-      .slice(0, CONFIGURATOR_OPTION_LIMIT)
-      .map(device => ({
-        value: device.name,
-        title: device.displayName || device.name,
-        subtitle: device.type || undefined,
-        meta: humanBytes(device.sizeBytes),
-      }));
-  }
-
-  async listMountpoints(device: string | null | undefined, query: string): Promise<ConfiguratorOption[]> {
-    const username = await this.account.getUsername();
-    const mountpoints = await fetchJottaMountpoints(
-      username, (device ?? "").trim() || DEFAULT_DEVICE, () => this.account.getAccessToken(), this.fetchImpl);
-    return mountpoints
-      .filter(mountpoint => optionMatches([mountpoint.name], query))
-      .slice(0, CONFIGURATOR_OPTION_LIMIT)
-      .map(mountpoint => ({ value: mountpoint.name, title: mountpoint.name, meta: humanBytes(mountpoint.sizeBytes) }));
-  }
-
-  /**
-   * Browses one directory level: `query` is the path typed so far, split on its last "/" into the
-   * directory to list (everything before) and a name prefix to filter by (everything after).
-   * Folders come back with a trailing slash on their `value`/`title` so picking one re-fills the
-   * input ready to keep typing into that folder; files are the terminal, selectable entries.
-   */
-  async browse(
-    device: string | null | undefined, mountpoint: string | null | undefined, query: string,
-  ): Promise<ConfiguratorOption[]> {
-    const { dirPath, prefix, entries } = await listJottaDirectory(this.account, this.fetchImpl, device, mountpoint, query);
-    return entries
-      .filter(entry => !entry.deleted && (!prefix || entry.name.toLowerCase().includes(prefix)))
-      .toSorted((a, b) => (a.kind !== b.kind ? (a.kind === "folder" ? -1 : 1) : a.name.localeCompare(b.name)))
-      .slice(0, CONFIGURATOR_OPTION_LIMIT)
-      .map(entry => {
-        const fullPath = dirPath ? `${dirPath}/${entry.name}` : entry.name;
-        if (entry.kind === "folder") {
-          return { value: `${fullPath}/`, title: `${fullPath}/`, meta: "folder" };
-        }
-        return { value: fullPath, title: fullPath, subtitle: entry.mimeType, meta: humanBytes(entry.size) };
-      });
-  }
-}
-
-/**
- * Resource configurator for a folder binding. Extends the file configurator purely to reuse
- * `listDevices`/`listMountpoints` unchanged; `browseFolders` replaces `browse` with a different
- * browsing shape suited to picking a *folder* rather than a file: every listed entry (files are
- * excluded entirely) is directly selectable, and the directory currently being looked inside of is
- * itself offered as a pseudo-entry — there is no separate "confirm this folder" affordance the
- * Autocomplete widget could otherwise expose, since selecting any option always finalizes it.
- */
-@validateRpc()
-export class JottacloudFolderConfiguratorUI extends JottacloudFileConfiguratorUI
-    implements JottacloudFolderConfiguratorRpc {
-  async browseFolders(
-    device: string | null | undefined, mountpoint: string | null | undefined, query: string,
-  ): Promise<ConfiguratorOption[]> {
-    const { dirPath, prefix, entries } = await listJottaDirectory(this.account, this.fetchImpl, device, mountpoint, query);
-
-    const folders = entries
-      .filter(entry => entry.kind === "folder" && !entry.deleted &&
-        (!prefix || entry.name.toLowerCase().includes(prefix)))
-      .toSorted((a, b) => a.name.localeCompare(b.name))
-      .slice(0, CONFIGURATOR_OPTION_LIMIT)
-      .map(entry => {
-        const fullPath = dirPath ? `${dirPath}/${entry.name}` : entry.name;
-        return { value: fullPath, title: fullPath, meta: "folder" };
-      });
-
-    // Offer "use this folder" for the directory currently being browsed, but only while the human
-    // hasn't typed a name to filter by -- once they have, they're clearly looking for one of its
-    // children, and repeating the parent as an option would be a confusing, unselected-by-typing
-    // entry sitting above the real matches.
-    //
-    // The mountpoint root's own path is "", but the sandbox runtime's own option sanitizer treats
-    // a falsy `value` as absent and drops the option entirely (`sanitizeOptions` in
-    // build-gatekeeper-configurator.ts: `if (!value || !title) return [];`) -- so the root case
-    // uses "." instead, a value no real folder can ever have (validateSegment forbids it), and
-    // `jottacloud-folder-configurator-ui.tsx`'s onChange translates it back to "" before storing it.
-    if (!prefix) {
-      const isRoot = dirPath === "";
-      const value = isRoot ? "." : dirPath;
-      const title = isRoot
-        ? `Use the whole ${(mountpoint ?? "").trim() || DEFAULT_MOUNTPOINT} mountpoint`
-        : `Use "${dirPath}"`;
-      folders.unshift({ value, title, meta: "select" });
+  async listNodes(parentId: string, query: string, cursor: string | null): Promise<JottacloudNodePage> {
+    const trimmed = query.trim();
+    // No name holds a slash, so a query with one is a path or a resource URL, not a filter.
+    if (trimmed.includes("/")) {
+      const node = await this.#lookUp(trimmed);
+      return { nodes: node ? [node] : [] };
     }
+    const needle = trimmed.toLowerCase();
+    const nodes = (await this.#children(parentId))
+      .filter(node => !needle || node.title.toLowerCase().includes(needle));
+    // A JFS listing is never paged, so neither is the read behind it: a cursor is an offset into it.
+    const offset = cursor === null ? 0 : Number(cursor);
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new Error(`Invalid cursor: ${cursor}`);
+    const end = offset + NODE_PAGE_SIZE;
+    return { nodes: nodes.slice(offset, end), nextCursor: end < nodes.length ? String(end) : undefined };
+  }
 
-    return folders.slice(0, CONFIGURATOR_OPTION_LIMIT);
+  async getNode(id: string): Promise<JottacloudNode | null> {
+    try {
+      if (isFolderResourceUrl(id)) {
+        const folder = parseFolderResourceUrl(id);
+        return folder.path ? await this.#find(folder, "folder") : await this.#mountpoint(folder);
+      }
+      return await this.#find(parseResourceUrl(id), "file");
+    } catch (error) {
+      if (isInvalidResource(error)) return null;
+      throw error;
+    }
+  }
+
+  async #children(parentId: string): Promise<JottacloudNode[]> {
+    if (parentId === ROOT_NODE_ID) {
+      const [mountpoints, devices] = await Promise.all([this.#mountpoints(DEFAULT_DEVICE), this.#devices()]);
+      const nodes = mountpoints.map(mountpoint => mountpointNode(DEFAULT_DEVICE, mountpoint));
+      if (devices.some(device => device.name !== DEFAULT_DEVICE)) nodes.push({ ...DEVICES_GROUP, path: [] });
+      return nodes;
+    }
+    if (parentId === DEVICES_NODE_ID) {
+      return (await this.#devices())
+        .filter(device => device.name !== DEFAULT_DEVICE)
+        .map(device => ({
+          id: deviceNodeId(device.name),
+          title: device.displayName || device.name,
+          kind: "device",
+          size: device.sizeBytes,
+          path: [DEVICES_GROUP],
+        }));
+    }
+    if (parentId.startsWith(DEVICE_NODE_PREFIX)) {
+      const device = decodeURIComponent(parentId.slice(DEVICE_NODE_PREFIX.length));
+      return (await this.#mountpoints(device)).map(mountpoint => mountpointNode(device, mountpoint));
+    }
+    // Anything else must be a mountpoint's or folder's id; parsing refuses a file's or a forged one.
+    const folder = parseFolderResourceUrl(parentId);
+    const entries = await fetchJottaFolder(
+      folder, await this.#account.getUsername(), () => this.#account.getAccessToken(), this.#fetchImpl);
+    return entries
+      .filter(entry => !entry.deleted && isBindableName(entry.name))
+      .toSorted((a, b) => (a.kind !== b.kind ? (a.kind === "folder" ? -1 : 1) : a.name.localeCompare(b.name)))
+      .map(entry => entryNode(folder, entry));
+  }
+
+  /** The node a pasted resource URL or `<mountpoint>/<path>` (on the default device) names. */
+  async #lookUp(text: string): Promise<JottacloudNode | null> {
+    try {
+      if (/^https:\/\//i.test(text)) {
+        const canonical = isFolderResourceUrl(text)
+          ? toFolderResourceUrl(parseFolderResourceUrl(text))
+          : toResourceUrl(parseResourceUrl(text));
+        return await this.getNode(canonical);
+      }
+      const [mountpoint, ...segments] = text.split("/").filter(Boolean);
+      if (!mountpoint) return null;
+      const location = normalizeFolderPath(DEFAULT_DEVICE, mountpoint, segments.join("/"));
+      return location.path ? await this.#find(location) : await this.#mountpoint(location);
+    } catch (error) {
+      if (isInvalidResource(error)) return null;
+      throw error;
+    }
+  }
+
+  /** The folder or file at `location`, read from its parent's listing, which says which it is. */
+  async #find(location: JottaFilePath, kind?: FolderListEntry["kind"]): Promise<JottacloudNode | null> {
+    const { parent, name } = splitParent(location);
+    let entries: FolderListEntry[];
+    try {
+      entries = await fetchJottaFolder(
+        parent, await this.#account.getUsername(), () => this.#account.getAccessToken(), this.#fetchImpl);
+    } catch (error) {
+      if (isNotFound(error)) return null;
+      throw error;
+    }
+    const entry = entries.find(candidate =>
+      candidate.name === name && !candidate.deleted && (kind === undefined || candidate.kind === kind));
+    return entry ? entryNode(parent, entry) : null;
+  }
+
+  async #mountpoint(location: JottaFilePath): Promise<JottacloudNode | null> {
+    const mountpoint = (await this.#mountpoints(location.device)).find(({ name }) => name === location.mountpoint);
+    return mountpoint ? mountpointNode(location.device, mountpoint) : null;
+  }
+
+  /** A device's mountpoints, bindable by name, or none for a device the account does not have. */
+  async #mountpoints(device: string): Promise<JottaMountpointEntry[]> {
+    try {
+      const mountpoints = await fetchJottaMountpoints(
+        await this.#account.getUsername(), device, () => this.#account.getAccessToken(), this.#fetchImpl);
+      return mountpoints.filter(({ name }) => isBindableName(name));
+    } catch (error) {
+      if (isNotFound(error)) return [];
+      throw error;
+    }
+  }
+
+  async #devices(): Promise<JottaDeviceEntry[]> {
+    const devices = await fetchJottaDevices(
+      await this.#account.getUsername(), () => this.#account.getAccessToken(), this.#fetchImpl);
+    return devices.filter(({ name }) => isBindableName(name));
   }
 }
 

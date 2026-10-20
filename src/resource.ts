@@ -23,18 +23,24 @@ export { DEFAULT_DEVICE, DEFAULT_MOUNTPOINT };
 /** Host used for this gatekeeper's synthetic resource-identity URLs (the real JFS API host). */
 const RESOURCE_HOST = "jfs.jottacloud.com";
 
+/**
+ * Leads the connect card, whose one picker also chooses a file ({@link JOTTACLOUD_FILE_RESOURCE} is
+ * grouped under it), so its title is the card's. A folder binding still describes itself by its
+ * folder.
+ */
+export const JOTTACLOUD_FOLDER_RESOURCE: SupportedResource = {
+  urlPattern: `https://${RESOURCE_HOST}/jfs-folder/*`,
+  title: "Jottacloud",
+  description:
+      "List, read, and write files within one folder you choose in Jottacloud, including creating " +
+      "new files there, or read and update one file — never your whole Jottacloud account.",
+};
+
 export const JOTTACLOUD_FILE_RESOURCE: SupportedResource = {
   urlPattern: `https://${RESOURCE_HOST}/jfs/*`,
   title: "Jottacloud File",
   description: "Read metadata and content, and upload new revisions, for one file you choose in Jottacloud.",
-};
-
-export const JOTTACLOUD_FOLDER_RESOURCE: SupportedResource = {
-  urlPattern: `https://${RESOURCE_HOST}/jfs-folder/*`,
-  title: "Jottacloud Folder",
-  description:
-      "List, read, and write files within one folder you choose in Jottacloud, including creating " +
-      "new files there — never your whole Jottacloud account.",
+  groupedWith: JOTTACLOUD_FOLDER_RESOURCE.urlPattern,
 };
 
 export const SUPPORTED_RESOURCES: SupportedResource[] = [JOTTACLOUD_FILE_RESOURCE, JOTTACLOUD_FOLDER_RESOURCE];

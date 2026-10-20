@@ -3,6 +3,8 @@ import {
   DEFAULT_DEVICE,
   DEFAULT_MOUNTPOINT,
   isFolderResourceUrl,
+  JOTTACLOUD_FILE_RESOURCE,
+  JOTTACLOUD_FOLDER_RESOURCE,
   normalizeFilePath,
   normalizeFolderPath,
   parseFolderResourceUrl,
@@ -30,6 +32,14 @@ describe("resource declarations", () => {
       "https://jfs.jottacloud.com/jfs/*",
       "https://jfs.jottacloud.com/jfs-folder/*",
     ]);
+  });
+
+  // One connect card and one picker choose a folder or a file. Neither type is separately
+  // grantable, so the account's connection already covers both.
+  it("groups the file type under the folder type's card", () => {
+    expect(JOTTACLOUD_FILE_RESOURCE.groupedWith).toBe(JOTTACLOUD_FOLDER_RESOURCE.urlPattern);
+    expect(JOTTACLOUD_FOLDER_RESOURCE.groupedWith).toBeUndefined();
+    expect(SUPPORTED_RESOURCES.some(resource => resource.grantable)).toBe(false);
   });
 });
 
